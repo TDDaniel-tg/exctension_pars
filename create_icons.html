@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Генератор иконок</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      text-align: center;
+    }
+    .icons {
+      display: flex;
+      justify-content: space-around;
+      margin: 30px 0;
+    }
+    canvas {
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      margin: 10px;
+    }
+    .icon-wrapper {
+      text-align: center;
+    }
+    button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 12px 30px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px;
+    }
+    button:hover {
+      background: #5568d3;
+    }
+    .instructions {
+      background: #f0f0f0;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    .instructions h3 {
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📊 Генератор иконок для Category Parser</h1>
+    
+    <div class="icons">
+      <div class="icon-wrapper">
+        <h3>16x16</h3>
+        <canvas id="icon16" width="16" height="16"></canvas>
+        <br>
+        <button onclick="downloadIcon('icon16', 16)">Скачать</button>
+      </div>
+      
+      <div class="icon-wrapper">
+        <h3>48x48</h3>
+        <canvas id="icon48" width="48" height="48"></canvas>
+        <br>
+        <button onclick="downloadIcon('icon48', 48)">Скачать</button>
+      </div>
+      
+      <div class="icon-wrapper">
+        <h3>128x128</h3>
+        <canvas id="icon128" width="128" height="128"></canvas>
+        <br>
+        <button onclick="downloadIcon('icon128', 128)">Скачать</button>
+      </div>
+    </div>
+
+    <div style="text-align: center;">
+      <button onclick="downloadAll()" style="background: #4CAF50; font-size: 18px; padding: 15px 40px;">
+        📥 Скачать все иконки
+      </button>
+    </div>
+
+    <div class="instructions">
+      <h3>Инструкции:</h3>
+      <ol>
+        <li>Нажмите кнопку "Скачать все иконки" или скачайте каждую иконку отдельно</li>
+        <li>Сохраните файлы в папку <code>icons/</code> вашего расширения</li>
+        <li>Убедитесь, что файлы названы: <code>icon16.png</code>, <code>icon48.png</code>, <code>icon128.png</code></li>
+        <li>Готово! Теперь можно загружать расширение в Chrome</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    // Рисуем иконки
+    function drawIcon(canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      
+      // Фон с градиентом
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#667eea');
+      gradient.addColorStop(1, '#764ba2');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      
+      // Рисуем график/столбики
+      ctx.fillStyle = 'white';
+      const barWidth = size * 0.12;
+      const spacing = size * 0.08;
+      const startX = size * 0.2;
+      const baseY = size * 0.8;
+      
+      // 3 столбика разной высоты
+      const heights = [0.3, 0.5, 0.4];
+      heights.forEach((height, index) => {
+        const x = startX + (barWidth + spacing) * index;
+        const h = size * height;
+        ctx.fillRect(x, baseY - h, barWidth, h);
+      });
+      
+      // Увеличительное стекло (для больших иконок)
+      if (size >= 48) {
+        const centerX = size * 0.7;
+        const centerY = size * 0.3;
+        const radius = size * 0.15;
+        
+        // Круг
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = size * 0.04;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        // Ручка
+        const angle = Math.PI / 4;
+        const handleLength = size * 0.12;
+        const handleX = centerX + Math.cos(angle) * radius;
+        const handleY = centerY + Math.sin(angle) * radius;
+        ctx.beginPath();
+        ctx.moveTo(handleX, handleY);
+        ctx.lineTo(handleX + Math.cos(angle) * handleLength, handleY + Math.sin(angle) * handleLength);
+        ctx.stroke();
+      }
+    }
+
+    // Инициализация
+    drawIcon('icon16', 16);
+    drawIcon('icon48', 48);
+    drawIcon('icon128', 128);
+
+    // Скачивание иконки
+    function downloadIcon(canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const link = document.createElement('a');
+      link.download = `icon${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // Скачать все
+    function downloadAll() {
+      setTimeout(() => downloadIcon('icon16', 16), 100);
+      setTimeout(() => downloadIcon('icon48', 48), 300);
+      setTimeout(() => downloadIcon('icon128', 128), 500);
+    }
+  </script>
+</body>
+</html>
+

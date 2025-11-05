@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Category Parser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>📊 Category Parser</h1>
+    
+    <div class="info">
+      <p>Парсинг категорий и подкатегорий с текущей страницы</p>
+    </div>
+
+    <div class="controls">
+      <button id="parseBtn" class="btn btn-primary">
+        🔍 Спарсить категории
+      </button>
+      
+      <button id="exportJsonBtn" class="btn btn-secondary" disabled>
+        📥 Экспорт JSON
+      </button>
+      
+      <button id="exportCsvBtn" class="btn btn-secondary" disabled>
+        📥 Экспорт CSV
+      </button>
+      
+      <button id="exportTxtBtn" class="btn btn-secondary" disabled>
+        📥 Экспорт TXT
+      </button>
+      
+      <button id="clearBtn" class="btn btn-danger" disabled>
+        🗑️ Очистить
+      </button>
+    </div>
+
+    <div id="status" class="status"></div>
+    
+    <div id="results" class="results"></div>
+    
+    <div id="stats" class="stats"></div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
+
