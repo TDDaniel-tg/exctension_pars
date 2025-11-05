@@ -2,6 +2,7 @@ let parsedData = null;
 
 document.addEventListener('DOMContentLoaded', function() {
   const parseBtn = document.getElementById('parseBtn');
+  const deepParseBtn = document.getElementById('deepParseBtn');
   const exportJsonBtn = document.getElementById('exportJsonBtn');
   const exportCsvBtn = document.getElementById('exportCsvBtn');
   const exportTxtBtn = document.getElementById('exportTxtBtn');
@@ -9,24 +10,21 @@ document.addEventListener('DOMContentLoaded', function() {
   const statusDiv = document.getElementById('status');
   const resultsDiv = document.getElementById('results');
   const statsDiv = document.getElementById('stats');
+  const progressDiv = document.getElementById('progress');
 
-  // Парсинг категорий
+  // Быстрый парсинг категорий
   parseBtn.addEventListener('click', async () => {
     try {
-      statusDiv.textContent = '⏳ Ожидание загрузки данных... (это может занять до 10 сек)';
+      statusDiv.textContent = '⏳ Парсинг текущей страницы...';
       statusDiv.className = 'status info';
       resultsDiv.innerHTML = '';
       statsDiv.innerHTML = '';
+      progressDiv.innerHTML = '';
       parseBtn.disabled = true;
+      deepParseBtn.disabled = true;
 
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       
-      // Сначала проверяем перехваченные AJAX данные
-      const interceptedResults = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        function: () => window.__interceptedData__
-      });
-
       // Основной парсинг
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -35,13 +33,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
       if (results && results[0] && results[0].result) {
         parsedData = results[0].result;
-        
-        // Добавляем перехваченные данные если есть
-        if (interceptedResults && interceptedResults[0] && interceptedResults[0].result) {
-          parsedData.interceptedAjax = interceptedResults[0].result.ajax.length;
-          parsedData.interceptedFetch = interceptedResults[0].result.fetch.length;
-        }
-        
         displayResults(parsedData);
         
         statusDiv.textContent = '✅ Данные успешно спарсены!';
@@ -59,6 +50,111 @@ document.addEventListener('DOMContentLoaded', function() {
       statusDiv.className = 'status error';
     } finally {
       parseBtn.disabled = false;
+      deepParseBtn.disabled = false;
+    }
+  });
+
+  // Глубокий парсинг - заходит в каждую категорию
+  deepParseBtn.addEventListener('click', async () => {
+    try {
+      statusDiv.textContent = '🚀 Глубокий парсинг запущен...';
+      statusDiv.className = 'status info';
+      resultsDiv.innerHTML = '';
+      statsDiv.innerHTML = '';
+      progressDiv.innerHTML = '';
+      parseBtn.disabled = true;
+      deepParseBtn.disabled = true;
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      // Шаг 1: Парсим категории на главной
+      statusDiv.textContent = '📋 Шаг 1: Сбор категорий с главной страницы...';
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        function: parseCategories
+      });
+
+      if (!results || !results[0] || !results[0].result) {
+        throw new Error('Не удалось получить категории');
+      }
+
+      const mainCategories = results[0].result.categories;
+      statusDiv.textContent = `🔍 Найдено ${mainCategories.length} категорий. Парсинг подкатегорий...`;
+      
+      // Шаг 2: Заходим в каждую категорию и парсим подкатегории
+      const deepData = {
+        url: results[0].result.url,
+        timestamp: new Date().toISOString(),
+        totalCategories: 0,
+        totalSubcategories: 0,
+        categories: []
+      };
+
+      for (let i = 0; i < mainCategories.length; i++) {
+        const category = mainCategories[i];
+        
+        // Обновляем прогресс
+        const percent = Math.round(((i + 1) / mainCategories.length) * 100);
+        progressDiv.innerHTML = `
+          <div><strong>Прогресс:</strong> ${i + 1} из ${mainCategories.length} категорий</div>
+          <div style="margin-top: 8px;"><strong>Текущая:</strong> ${category.name}</div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: ${percent}%">${percent}%</div>
+          </div>
+        `;
+
+        try {
+          // Парсим подкатегории со страницы категории
+          const subcats = await fetchSubcategories(category.url);
+          
+          deepData.categories.push({
+            id: i + 1,
+            name: category.name,
+            url: category.url,
+            subcategories: subcats,
+            subcategoryCount: subcats.length
+          });
+
+          deepData.totalSubcategories += subcats.length;
+          
+        } catch (error) {
+          console.error(`Ошибка парсинга ${category.url}:`, error);
+          // Добавляем категорию без подкатегорий
+          deepData.categories.push({
+            id: i + 1,
+            name: category.name,
+            url: category.url,
+            subcategories: [],
+            subcategoryCount: 0,
+            error: error.message
+          });
+        }
+
+        // Небольшая пауза между запросами
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      deepData.totalCategories = deepData.categories.length;
+      parsedData = deepData;
+
+      displayResults(parsedData);
+      
+      statusDiv.textContent = '✅ Глубокий парсинг завершен!';
+      statusDiv.className = 'status success';
+      progressDiv.innerHTML = '';
+      
+      exportJsonBtn.disabled = false;
+      exportCsvBtn.disabled = false;
+      exportTxtBtn.disabled = false;
+      clearBtn.disabled = false;
+
+    } catch (error) {
+      statusDiv.textContent = '❌ Ошибка: ' + error.message;
+      statusDiv.className = 'status error';
+      progressDiv.innerHTML = '';
+    } finally {
+      parseBtn.disabled = false;
+      deepParseBtn.disabled = false;
     }
   });
 
@@ -120,12 +216,65 @@ document.addEventListener('DOMContentLoaded', function() {
     statsDiv.innerHTML = '';
     statusDiv.textContent = '';
     statusDiv.className = 'status';
+    progressDiv.innerHTML = '';
     exportJsonBtn.disabled = true;
     exportCsvBtn.disabled = true;
     exportTxtBtn.disabled = true;
     clearBtn.disabled = true;
   });
 });
+
+// Функция для получения подкатегорий со страницы категории
+async function fetchSubcategories(url) {
+  try {
+    const response = await fetch(url);
+    const html = await response.text();
+    
+    // Создаем временный DOM для парсинга
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    
+    // Исключаем навигацию
+    const excludeSelectors = ['header', 'nav', 'footer', '.header', '.nav', '.navigation', '.navbar', '.footer', '.menu'];
+    excludeSelectors.forEach(selector => {
+      doc.querySelectorAll(selector).forEach(el => el.remove());
+    });
+    
+    // Ищем подкатегории (ссылки в основном контенте)
+    const subcategories = [];
+    const links = doc.querySelectorAll('a[href]');
+    const uniqueUrls = new Set();
+    
+    links.forEach(link => {
+      const text = link.textContent.trim();
+      const href = link.getAttribute('href');
+      
+      if (!text || !href || href.includes('#')) return;
+      if (text.length < 2 || text.length > 200) return;
+      
+      // Преобразуем относительные ссылки в абсолютные
+      let fullUrl;
+      try {
+        fullUrl = new URL(href, url).href;
+      } catch {
+        return;
+      }
+      
+      if (!uniqueUrls.has(fullUrl)) {
+        uniqueUrls.add(fullUrl);
+        subcategories.push({
+          name: text,
+          url: fullUrl
+        });
+      }
+    });
+    
+    return subcategories;
+  } catch (error) {
+    console.error('Ошибка fetch подкатегорий:', error);
+    return [];
+  }
+}
 
 // Функция парсинга (выполняется на странице)
 async function parseCategories() {
