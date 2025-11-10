@@ -9,20 +9,52 @@
 <body>
   <div class="container">
     <h1>📊 Category Parser</h1>
-    
-    <div class="info">
-      <p>Парсинг категорий и подкатегорий с текущей страницы</p>
+
+    <div class="tab-buttons">
+      <button class="tab-button active" data-tab="categories">Категории</button>
+      <button class="tab-button" data-tab="products">Товары</button>
     </div>
 
-    <div class="controls">
-      <button id="parseBtn" class="btn btn-primary">
-        🔍 Быстрый парсинг
-      </button>
-      
-      <button id="deepParseBtn" class="btn btn-primary" style="background: #FF6B6B;">
-        🚀 Глубокий парсинг
-      </button>
-      
+    <div class="options">
+      <label class="checkbox-label">
+        <input type="checkbox" id="parseImagesCheckbox">
+        <span>📷 Парсить изображения</span>
+      </label>
+    </div>
+
+    <div id="categorySection" class="tab-section active">
+      <div class="info">
+        <p>Парсинг категорий и подкатегорий с текущей страницы</p>
+      </div>
+
+      <div class="controls">
+        <button id="parseBtn" class="btn btn-primary">
+          🔍 Быстрый парсинг
+        </button>
+        
+        <button id="deepParseBtn" class="btn btn-primary" style="background: #FF6B6B;">
+          🚀 Глубокий парсинг
+        </button>
+      </div>
+    </div>
+
+    <div id="productSection" class="tab-section">
+      <div class="info">
+        <p>Парсинг товаров: название, цена, описание и все изображения (без перехода в карточку товара)</p>
+      </div>
+
+      <div class="controls">
+        <button id="parseProductsBtn" class="btn btn-primary">
+          🛒 Быстрый парсинг товаров
+        </button>
+        
+        <button id="deepParseProductsBtn" class="btn btn-primary" style="background: #FF8C42;">
+          🔎 Глубокий парсинг товаров
+        </button>
+      </div>
+    </div>
+
+    <div class="controls export-controls">
       <button id="exportJsonBtn" class="btn btn-secondary" disabled>
         📥 Экспорт JSON
       </button>
@@ -33,6 +65,10 @@
       
       <button id="exportTxtBtn" class="btn btn-secondary" disabled>
         📥 Экспорт TXT
+      </button>
+      
+      <button id="downloadImagesBtn" class="btn btn-secondary" style="background: #9C27B0;" disabled>
+        📦 Скачать ZIP с изображениями
       </button>
       
       <button id="clearBtn" class="btn btn-danger" disabled>
@@ -49,6 +85,7 @@
     <div id="stats" class="stats"></div>
   </div>
   
+  <script src="jszip.min.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

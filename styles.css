@@ -37,6 +37,34 @@ h1 {
   line-height: 1.5;
 }
 
+.options {
+  background: rgba(255, 255, 255, 0.95);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+  cursor: pointer;
+}
+
+.checkbox-label span {
+  font-weight: 500;
+}
+
 .controls {
   display: flex;
   flex-direction: column;
@@ -256,5 +284,103 @@ h1 {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+.tab-buttons {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.tab-button {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.3);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 0;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.tab-button.active {
+  background: rgba(255, 255, 255, 0.95);
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.tab-button:not(.active):hover {
+  transform: translateY(-2px);
+}
+
+.tab-section {
+  display: none;
+}
+
+.tab-section.active {
+  display: block;
+}
+
+.export-controls {
+  margin-top: 5px;
+}
+
+.product-item {
+  margin-bottom: 15px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #42a5f5;
+}
+
+.product-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.product-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+}
+
+.product-price {
+  font-weight: 600;
+  color: #2e7d32;
+  font-size: 13px;
+}
+
+.product-url {
+  font-size: 11px;
+  color: #666;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.product-description {
+  font-size: 12px;
+  color: #555;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.product-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.product-images img {
+  max-width: 100px;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+.product-images img:first-child {
+  max-width: 150px;
 }
 
