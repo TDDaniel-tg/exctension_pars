@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const exportJsonBtn = document.getElementById('exportJsonBtn');
   const exportCsvBtn = document.getElementById('exportCsvBtn');
   const exportTxtBtn = document.getElementById('exportTxtBtn');
+  const exportSqlBtn = document.getElementById('exportSqlBtn');
   const downloadImagesBtn = document.getElementById('downloadImagesBtn');
   const clearBtn = document.getElementById('clearBtn');
   const statusDiv = document.getElementById('status');
@@ -80,6 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
         exportJsonBtn.disabled = false;
         exportCsvBtn.disabled = false;
         exportTxtBtn.disabled = false;
+        exportSqlBtn.disabled = false;
         downloadImagesBtn.disabled = totalImages === 0;
         clearBtn.disabled = false;
       } else {
@@ -281,7 +283,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Быстрый парсинг товаров
+  // Быстрый парсинг товаров - НЕ переходит на страницы товаров, парсит только текущую страницу
   parseProductsBtn.addEventListener('click', async () => {
     try {
       statusDiv.textContent = '⏳ Парсинг товаров на текущей странице...';
@@ -295,6 +297,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const parseImages = parseImagesCheckbox.checked;
 
+      // Обычный парсинг - только текущая страница, БЕЗ перехода на страницы товаров
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         function: parseProducts,
@@ -326,6 +329,7 @@ document.addEventListener('DOMContentLoaded', function() {
         exportJsonBtn.disabled = false;
         exportCsvBtn.disabled = false;
         exportTxtBtn.disabled = false;
+        exportSqlBtn.disabled = false;
         downloadImagesBtn.disabled = parsedData.totalImages === 0;
         clearBtn.disabled = false;
       } else {
@@ -340,7 +344,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Глубокий парсинг товаров
+  // Глубокий парсинг товаров - ПЕРЕХОДИТ на каждую страницу товара для получения полного описания
   deepParseProductsBtn.addEventListener('click', async () => {
     try {
       statusDiv.textContent = '🚀 Глубокий парсинг товаров...';
@@ -408,7 +412,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (details.images && details.images.length > 0) {
               const imageSet = new Set(images);
-              details.images.forEach(img => imageSet.add(img));
+              details.images.forEach(img => {
+                if (img && img.trim().length > 10 && !img.startsWith('data:')) {
+                  imageSet.add(img);
+                }
+              });
               images = Array.from(imageSet);
             }
           } catch (error) {
@@ -416,7 +424,25 @@ document.addEventListener('DOMContentLoaded', function() {
           }
         }
 
-        totalImages += images.length;
+        // Фильтруем пустые и невалидные изображения
+        const validImages = images.filter(img => {
+          if (!img || typeof img !== 'string') return false;
+          const trimmed = img.trim();
+          return trimmed.length >= 10 && !trimmed.startsWith('data:');
+        });
+        
+        // Убираем дубликаты
+        const uniqueImages = [];
+        const seenUrls = new Set();
+        validImages.forEach(img => {
+          const normalized = img.split('?')[0].split('#')[0];
+          if (!seenUrls.has(normalized)) {
+            seenUrls.add(normalized);
+            uniqueImages.push(img);
+          }
+        });
+
+        totalImages += uniqueImages.length;
 
         detailedProducts.push({
           id: detailedProducts.length + 1,
@@ -424,8 +450,8 @@ document.addEventListener('DOMContentLoaded', function() {
           url: product.url || '',
           price: product.price || '',
           description: description || '',
-          image: images[0] || product.image || '',
-          images: images
+          image: uniqueImages[0] || '',
+          images: uniqueImages
         });
 
         await new Promise(resolve => setTimeout(resolve, 150));
@@ -450,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
       exportJsonBtn.disabled = false;
       exportCsvBtn.disabled = false;
       exportTxtBtn.disabled = false;
+      exportSqlBtn.disabled = false; // Всегда включаем для товаров
       downloadImagesBtn.disabled = totalImages === 0;
       clearBtn.disabled = false;
 
@@ -513,6 +540,24 @@ document.addEventListener('DOMContentLoaded', function() {
       URL.revokeObjectURL(url);
       
       statusDiv.textContent = '✅ TXT файл загружен!';
+      statusDiv.className = 'status success';
+    }
+  });
+
+  // Экспорт в SQL (миграция)
+  exportSqlBtn.addEventListener('click', () => {
+    if (parsedData) {
+      const sql = convertToSQL(parsedData, parsedDataType);
+      const blob = new Blob([sql], { type: 'text/plain;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const prefix = parsedDataType === 'products' ? 'products' : 'categories';
+      a.href = url;
+      a.download = `${prefix}_migration_${new Date().getTime()}.sql`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      statusDiv.textContent = '✅ SQL миграция загружена!';
       statusDiv.className = 'status success';
     }
   });
@@ -736,6 +781,7 @@ document.addEventListener('DOMContentLoaded', function() {
     exportJsonBtn.disabled = true;
     exportCsvBtn.disabled = true;
     exportTxtBtn.disabled = true;
+    exportSqlBtn.disabled = true;
     downloadImagesBtn.disabled = true;
     clearBtn.disabled = true;
   });
@@ -1347,12 +1393,26 @@ async function parseProducts(parseImages = false) {
     } catch (e) {}
   });
 
-  // Легкая прокрутка для ленивой загрузки
+  // Агрессивная прокрутка для ленивой загрузки всех товаров
   const scrollHeight = document.documentElement.scrollHeight;
-  window.scrollTo(0, scrollHeight);
-  await wait(400);
+  const viewportHeight = window.innerHeight;
+  const scrollSteps = Math.ceil(scrollHeight / viewportHeight);
+  
+  // Прокручиваем пошагово, чтобы загрузить все товары
+  for (let i = 0; i <= scrollSteps; i++) {
+    window.scrollTo(0, (i * viewportHeight));
+    await wait(300);
+  }
+  
+  // Прокручиваем обратно вверх
   window.scrollTo(0, 0);
-  await wait(400);
+  await wait(500);
+  
+  // Ещё раз прокручиваем вниз и вверх для надёжности
+  window.scrollTo(0, scrollHeight);
+  await wait(500);
+  window.scrollTo(0, 0);
+  await wait(500);
 
   const productSelectors = [
     '[class*="product-card"]',
@@ -1365,8 +1425,19 @@ async function parseProducts(parseImages = false) {
     '[class*="product"] li',
     'li[class*="product"]',
     '[data-product-id]',
-    '[data-product]','[data-sku]','[data-testid*="product"]',
-    '.product','article','[class*="grid__item"]','[class*="item-card"]'
+    '[data-product]',
+    '[data-sku]',
+    '[data-testid*="product"]',
+    '.product',
+    'article',
+    '[class*="grid__item"]',
+    '[class*="item-card"]',
+    '[class*="card"]',
+    '[class*="tile"]',
+    '[class*="item"]',
+    '[role="article"]',
+    '[class*="result"]',
+    '[class*="listing"]'
   ];
 
   const productsMap = new Map();
@@ -1384,20 +1455,115 @@ async function parseProducts(parseImages = false) {
     }
   };
 
+  // Функция валидации изображений - проверяет, что изображение валидное и не пустое
+  // Ослабленная валидация - не блокируем товары без изображений
+  const isValidImage = (src) => {
+    if (!src || typeof src !== 'string') return false;
+    
+    const trimmed = src.trim();
+    
+    // Проверяем минимальную длину (снизил до 5 для более гибкой валидации)
+    if (trimmed.length < 5) return false;
+    
+    // Пропускаем data: URI только если это явно placeholder
+    if (trimmed.startsWith('data:image/svg+xml')) {
+      // SVG может быть валидным
+      return trimmed.length > 50; // Минимальная длина для валидного SVG
+    }
+    if (trimmed.startsWith('data:') && trimmed.length < 100) {
+      // Очень короткие data: URI - скорее всего placeholder
+      return false;
+    }
+    
+    // Пропускаем явные placeholder изображения только если они не полные URL
+    const lowerSrc = trimmed.toLowerCase();
+    const strictPlaceholderPatterns = [
+      '1x1.gif',
+      'blank.gif',
+      'spacer.gif',
+      'clear.gif',
+      'pixel.gif',
+      '0x0'
+    ];
+    
+    // Строгая проверка только для явных placeholder файлов
+    if (strictPlaceholderPatterns.some(pattern => lowerSrc.endsWith(pattern))) {
+      if (!lowerSrc.startsWith('http://') && !lowerSrc.startsWith('https://')) {
+        return false;
+      }
+    }
+    
+    // Проверяем расширения изображений
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico'];
+    const hasImageExtension = imageExtensions.some(ext => lowerSrc.includes(ext));
+    
+    // Если есть расширение или это полный URL - разрешаем
+    if (hasImageExtension || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/') || trimmed.startsWith('//')) {
+      return true;
+    }
+    
+    return false;
+  };
+
   const extractText = (element, selectors) => {
     for (const selector of selectors) {
       const found = element.querySelector(selector);
-      if (found && found.textContent.trim().length > 1) {
-        return found.textContent.trim();
+      if (found) {
+        // Собираем полный текст из всех дочерних элементов
+        let fullText = '';
+        // Используем innerText для более точного извлечения видимого текста
+        if (found.innerText) {
+          fullText = found.innerText.trim();
+        } else {
+          // Если innerText недоступен, собираем текст из всех текстовых узлов
+          const walker = document.createTreeWalker(
+            found,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+          );
+          const textNodes = [];
+          let node;
+          while (node = walker.nextNode()) {
+            const text = node.textContent.trim();
+            if (text) {
+              textNodes.push(text);
+            }
+          }
+          fullText = textNodes.join(' ').trim();
+        }
+        
+        if (fullText.length > 1) {
+          return fullText;
+        }
       }
     }
     return '';
   };
 
   const addProduct = (product) => {
-    if (!product || !product.url) return;
-    if (!productsMap.has(product.url)) {
-      productsMap.set(product.url, product);
+    if (!product) return;
+    
+    // Если нет URL, но есть название - создаём уникальный ключ
+    if (!product.url) {
+      // Используем название + индекс как ключ для товаров без URL
+      const key = product.name ? `no-url-${product.name}-${productsMap.size}` : `no-url-${productsMap.size}`;
+      if (!productsMap.has(key)) {
+        productsMap.set(key, product);
+      }
+      return;
+    }
+    
+    // Если есть URL, используем его как ключ (но разрешаем дубликаты с разными названиями)
+    const urlKey = product.url;
+    const existing = productsMap.get(urlKey);
+    
+    // Если товар с таким URL уже есть, но название отличается - добавляем как новый
+    if (existing && existing.name !== product.name) {
+      const uniqueKey = `${urlKey}-${productsMap.size}`;
+      productsMap.set(uniqueKey, product);
+    } else if (!existing) {
+      productsMap.set(urlKey, product);
     }
   };
 
@@ -1413,11 +1579,13 @@ async function parseProducts(parseImages = false) {
         return;
       }
 
-      // Минимальный текстовый контент для отсечения пустых блоков-обёрток
-      if (element.textContent.replace(/\s+/g, ' ').trim().length < 6) {
+      // Минимальный текстовый контент для отсечения пустых блоков-обёрток (снизил до 3)
+      if (element.textContent.replace(/\s+/g, ' ').trim().length < 3) {
         return;
       }
 
+      // Проверяем, не является ли это дубликатом по URL, а не по элементу
+      // Это позволяет парсить товары, которые могут быть в разных контейнерах
       seenElements.add(element);
 
       const link = element.querySelector('a[href]');
@@ -1434,17 +1602,90 @@ async function parseProducts(parseImages = false) {
       }
 
       const name = extractText(element, ['[class*="name"]', '[class*="title"]', 'h2', 'h3', 'h4', '.product-name']) || (link ? link.textContent.trim() : '');
-      if (!name || name.length < 2 || name.length > 200) {
+      // Ослабил проверку - разрешаем названия до 300 символов и минимум 1 символ
+      if (!name || name.length < 1 || name.length > 300) {
         return;
       }
 
       const price = extractText(element, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
-      const description = extractText(element, ['[class*="description"]', '.product-description', '.desc', '[data-description]']) || element.getAttribute('data-description') || '';
+      
+      // Агрессивный парсинг описания - собираем ВСЁ, что не является названием или ценой
+      let description = extractText(element, [
+        '[class*="description"]', 
+        '.product-description', 
+        '.desc', 
+        '[data-description]',
+        '[class*="summary"]',
+        '[class*="short-desc"]',
+        '[class*="long-desc"]',
+        '[class*="detail"]',
+        '[class*="info"]',
+        '[class*="spec"]',
+        '[class*="feature"]'
+      ]) || element.getAttribute('data-description') || '';
+      
+      // Если описание не найдено или короткое, собираем ВСЕ текстовые элементы
+      if (!description || description.length < 20) {
+        // Получаем весь текст элемента
+        const allText = element.innerText || element.textContent || '';
+        
+        // Убираем название и цену из текста
+        let cleanText = allText;
+        if (name) {
+          cleanText = cleanText.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+        }
+        if (price) {
+          cleanText = cleanText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+        }
+        
+        // Убираем служебные слова и короткие фразы
+        cleanText = cleanText
+          .replace(/\s+/g, ' ')
+          .replace(/\b(Add to Cart|Buy Now|View Details|Learn More|Read More|See More|Shop Now|Add|Cart|Buy|View|Details|More|Now)\b/gi, '')
+          .trim();
+        
+        // Если осталось достаточно текста, используем его как описание
+        if (cleanText.length > 15) {
+          // Берем первые 500 символов, чтобы не было слишком длинно
+          description = cleanText.substring(0, 500).trim();
+        } else {
+          // Если всё ещё мало текста, ищем в дочерних элементах
+          const descElements = element.querySelectorAll('p, span, div, li, td, [class*="text"], [class*="info"], [class*="detail"], [class*="desc"]');
+          const descTexts = [];
+          descElements.forEach(descEl => {
+            // Пропускаем элементы, которые уже использованы для названия или цены
+            if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]') || descEl.closest('a')) {
+              return;
+            }
+            const text = descEl.innerText || descEl.textContent;
+            if (text && text.trim().length > 5) {
+              // Убираем название и цену из текста элемента
+              let cleanElText = text;
+              if (name) {
+                cleanElText = cleanElText.replace(new RegExp(name.substring(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+              }
+              if (price) {
+                cleanElText = cleanElText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+              }
+              cleanElText = cleanElText.trim();
+              if (cleanElText.length > 5) {
+                descTexts.push(cleanElText);
+              }
+            }
+          });
+          if (descTexts.length > 0) {
+            description = descTexts.join(' ').trim().substring(0, 500);
+          }
+        }
+      }
 
+      // Добавляем товар даже если нет цены и описания, если есть название и URL
+      // Это важно для парсинга всех товаров
       if (!price && !description) {
         const textContent = element.textContent.replace(/\s+/g, ' ').trim();
-        if (textContent.length < 20) {
-          // всё равно добавляем товар, но помечаем пустые поля
+        // Снизил минимальную длину до 10, чтобы парсить больше товаров
+        if (textContent.length < 10) {
+          // Всё равно добавляем товар, но помечаем пустые поля
           addProduct({
             name,
             url: productUrl,
@@ -1466,28 +1707,39 @@ async function parseProducts(parseImages = false) {
         if (!src && img.getAttribute('srcset')) {
           src = img.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
         }
-        if (src) {
+        
+        // Валидируем изображение перед добавлением
+        if (src && isValidImage(src)) {
           const resolved = resolveImageUrl(src);
-          if (!primaryImage) {
-            primaryImage = resolved;
-          }
-          if (parseImages) {
-            imagesSet.add(resolved);
+          
+          // Дополнительная проверка после разрешения URL
+          if (resolved && isValidImage(resolved)) {
+            if (!primaryImage) {
+              primaryImage = resolved;
+            }
+            if (parseImages) {
+              imagesSet.add(resolved);
+            }
           }
         }
       });
 
-      if (!parseImages && primaryImage) {
+      if (!parseImages && primaryImage && isValidImage(primaryImage)) {
         imagesSet.add(primaryImage);
       }
 
+      // Фильтруем пустые изображения перед сохранением, но не блокируем товар без изображений
+      const validImages = Array.from(imagesSet).filter(img => img && isValidImage(img));
+      const finalPrimaryImage = primaryImage && isValidImage(primaryImage) ? primaryImage : (validImages.length > 0 ? validImages[0] : '');
+
+      // Добавляем товар даже если нет изображений
       addProduct({
         name,
         url: productUrl,
         price: price.trim(),
         description: description.trim(),
-        image: primaryImage,
-        images: Array.from(imagesSet)
+        image: finalPrimaryImage || '',
+        images: validImages
       });
     });
   });
@@ -1533,6 +1785,24 @@ async function parseProducts(parseImages = false) {
 
       price = extractText(parent, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
       description = extractText(parent, ['[class*="description"]', '.product-description', '.desc', '[data-description]']);
+      
+      // Если описание короткое, пробуем собрать из других элементов
+      if (!description || description.length < 10) {
+        const descElements = parent.querySelectorAll('[class*="text"], [class*="info"], [class*="detail"], p, span[class*="desc"]');
+        const descTexts = [];
+        descElements.forEach(descEl => {
+          if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]')) {
+            return;
+          }
+          const text = descEl.innerText || descEl.textContent;
+          if (text && text.trim().length > 10) {
+            descTexts.push(text.trim());
+          }
+        });
+        if (descTexts.length > 0) {
+          description = descTexts.join(' ').trim();
+        }
+      }
 
       if (!price && !description && parent.textContent.replace(/\s+/g, ' ').trim().length < 15) {
         return;
@@ -1543,28 +1813,39 @@ async function parseProducts(parseImages = false) {
         if (!src && img.getAttribute('srcset')) {
           src = img.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
         }
-        if (src) {
+        
+        // Валидируем изображение перед добавлением
+        if (src && isValidImage(src)) {
           const resolved = resolveImageUrl(src);
-          if (!primaryImage) {
-            primaryImage = resolved;
-          }
-          if (parseImages) {
-            imagesSet.add(resolved);
+          
+          // Дополнительная проверка после разрешения URL
+          if (resolved && isValidImage(resolved)) {
+            if (!primaryImage) {
+              primaryImage = resolved;
+            }
+            if (parseImages) {
+              imagesSet.add(resolved);
+            }
           }
         }
       });
 
-      if (!parseImages && primaryImage) {
+      if (!parseImages && primaryImage && isValidImage(primaryImage)) {
         imagesSet.add(primaryImage);
       }
 
+      // Фильтруем пустые изображения перед сохранением, но не блокируем товар без изображений
+      const validImages = Array.from(imagesSet).filter(img => img && isValidImage(img));
+      const finalPrimaryImage = primaryImage && isValidImage(primaryImage) ? primaryImage : (validImages.length > 0 ? validImages[0] : '');
+
+      // Добавляем товар даже если нет изображений
       addProduct({
         name: text,
         url,
         price: price.trim(),
         description: description.trim(),
-        image: primaryImage,
-        images: Array.from(imagesSet)
+        image: finalPrimaryImage || '',
+        images: validImages
       });
     });
   }
@@ -1619,36 +1900,204 @@ async function fetchProductDetails(url, parseImages = false) {
       '.product-description',
       '#description',
       '.tab-description',
-      '.short-description'
+      '.short-description',
+      '[class*="detail"]',
+      '[class*="info"]',
+      '[class*="content"]',
+      'main [class*="text"]',
+      'article [class*="text"]'
     ];
 
+    // Функция для сбора полного текста из элемента
+    const getFullText = (element) => {
+      if (!element) return '';
+      
+      // Сначала пробуем innerText (более точный для видимого текста)
+      if (element.innerText) {
+        return element.innerText.trim();
+      }
+      
+      // Если innerText недоступен, собираем из всех текстовых узлов
+      const textNodes = [];
+      const walker = doc.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode: function(node) {
+            // Пропускаем скрипты и стили
+            const parent = node.parentElement;
+            if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        },
+        false
+      );
+      
+      let node;
+      while (node = walker.nextNode()) {
+        const text = node.textContent.trim();
+        if (text && text.length > 0) {
+          textNodes.push(text);
+        }
+      }
+      
+      return textNodes.join(' ').trim();
+    };
+
+    // Ищем описание по селекторам
     for (const selector of descSelectors) {
-      const element = doc.querySelector(selector);
-      if (element && element.textContent.trim().length > 5) {
-        description = element.textContent.trim();
-        break;
+      const elements = doc.querySelectorAll(selector);
+      if (elements.length > 0) {
+        // Собираем текст из всех найденных элементов
+        const texts = [];
+        elements.forEach(element => {
+          const text = getFullText(element);
+          if (text && text.length > 5) {
+            texts.push(text);
+          }
+        });
+        
+        if (texts.length > 0) {
+          // Объединяем все тексты, убирая дубликаты
+          description = texts.join('\n\n').trim();
+          break;
+        }
       }
     }
 
-    if (!description) {
+    // Если не нашли, ищем в основных контентных блоках
+    if (!description || description.length < 10) {
+      const mainContent = doc.querySelector('main, article, [class*="product-detail"], [class*="product-info"]');
+      if (mainContent) {
+        // Исключаем уже найденные элементы (название, цену и т.д.)
+        const excludeSelectors = ['header', 'nav', 'footer', '[class*="price"]', '[class*="title"]', '[class*="name"]', '[class*="image"]', '[class*="gallery"]'];
+        excludeSelectors.forEach(sel => {
+          mainContent.querySelectorAll(sel).forEach(el => el.remove());
+        });
+        
+        const mainText = getFullText(mainContent);
+        if (mainText && mainText.length > description.length) {
+          description = mainText;
+        }
+      }
+    }
+
+    // Если всё ещё не нашли, пробуем meta теги
+    if (!description || description.length < 10) {
       const metaDesc = doc.querySelector('meta[name="description"]') || doc.querySelector('meta[property="og:description"]');
       if (metaDesc) {
-        description = metaDesc.getAttribute('content')?.trim() || '';
+        const metaText = metaDesc.getAttribute('content')?.trim() || '';
+        if (metaText && metaText.length > description.length) {
+          description = metaText;
+        }
       }
+    }
+
+    // Пробуем извлечь из JSON-LD
+    if (!description || description.length < 10) {
+      doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+        try {
+          const json = JSON.parse(script.textContent.trim());
+          const extractDescription = (obj) => {
+            if (typeof obj === 'string') return obj;
+            if (Array.isArray(obj)) {
+              return obj.map(extractDescription).filter(Boolean).join(' ');
+            }
+            if (obj && typeof obj === 'object') {
+              if (obj.description) return extractDescription(obj.description);
+              if (obj.text) return extractDescription(obj.text);
+            }
+            return '';
+          };
+          
+          const jsonDesc = extractDescription(json);
+          if (jsonDesc && jsonDesc.length > description.length) {
+            description = jsonDesc;
+          }
+        } catch (e) {
+          // игнорируем ошибки
+        }
+      });
     }
 
     const imagesSet = new Set();
 
+    // Функция валидации изображений для fetchProductDetails
+    const isValidImageUrl = (src) => {
+      if (!src || typeof src !== 'string') return false;
+      
+      const trimmed = src.trim();
+      
+      // Проверяем минимальную длину
+      if (trimmed.length < 10) return false;
+      
+      // Пропускаем data: URI
+      if (trimmed.startsWith('data:')) return false;
+      
+      // Пропускаем placeholder изображения
+      const lowerSrc = trimmed.toLowerCase();
+      const placeholderPatterns = [
+        'placeholder',
+        '1x1',
+        'blank',
+        'transparent',
+        'spacer',
+        'empty',
+        'no-image',
+        'noimage',
+        'default',
+        'loading',
+        'lazy',
+        'pixel',
+        'clear.gif',
+        'spacer.gif',
+        '1px',
+        '0x0'
+      ];
+      
+      if (placeholderPatterns.some(pattern => lowerSrc.includes(pattern))) {
+        if (!lowerSrc.startsWith('http://') && !lowerSrc.startsWith('https://')) {
+          return false;
+        }
+      }
+      
+      // Проверяем расширения изображений
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico'];
+      const hasImageExtension = imageExtensions.some(ext => lowerSrc.includes(ext));
+      
+      if (!hasImageExtension && !trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('/')) {
+        return false;
+      }
+      
+      if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+        return false;
+      }
+      
+      return true;
+    };
+
     const addImage = (src) => {
-      if (!src) return;
+      if (!src || !isValidImageUrl(src)) return;
+      
       try {
+        let resolvedUrl;
         if (src.startsWith('//')) {
-          imagesSet.add(new URL(url).protocol + src);
+          resolvedUrl = new URL(url).protocol + src;
         } else {
-          imagesSet.add(new URL(src, url).href);
+          resolvedUrl = new URL(src, url).href;
+        }
+        
+        // Проверяем валидность после разрешения URL
+        if (isValidImageUrl(resolvedUrl)) {
+          imagesSet.add(resolvedUrl);
         }
       } catch (e) {
-        imagesSet.add(src);
+        // Если не удалось разрешить URL, но исходный валиден, добавляем его
+        if (isValidImageUrl(src)) {
+          imagesSet.add(src);
+        }
       }
     };
 
@@ -1665,15 +2114,16 @@ async function fetchProductDetails(url, parseImages = false) {
       gallerySelectors.forEach(selector => {
         doc.querySelectorAll(selector).forEach(img => {
           const src = img.getAttribute('data-zoom-image') || img.getAttribute('data-large-image') || img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-          if (src) {
+          if (src && isValidImageUrl(src)) {
             addImage(src);
           }
         });
       });
 
+      // Парсим все изображения, но только валидные
       doc.querySelectorAll('img').forEach(img => {
         const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-        if (src) {
+        if (src && isValidImageUrl(src)) {
           addImage(src);
         }
       });
@@ -1708,7 +2158,10 @@ async function fetchProductDetails(url, parseImages = false) {
       });
     }
 
-    const images = Array.from(imagesSet);
+    // Фильтруем финальный список изображений, убирая пустые и невалидные
+    const images = Array.from(imagesSet)
+      .filter(img => img && isValidImageUrl(img))
+      .filter((img, index, arr) => arr.indexOf(img) === index); // Убираем дубликаты
 
     return {
       description: description,
@@ -1947,5 +2400,327 @@ function sanitizeFilename(name) {
     .replace(/\s+/g, ' ') // Оставляем пробелы как есть
     .trim()
     .substring(0, 100); // Увеличил лимит до 100 символов
+}
+
+// Функция для транслитерации (создание screen_name)
+function transliterate(str) {
+  const ru = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+  };
+  
+  return str
+    .toLowerCase()
+    .split('')
+    .map(char => ru[char] || char)
+    .join('')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Функция для генерации имени файла фото (формат: /storage/YYYY/MMDD/hash.jpg)
+function generatePhotoPath(imageUrl, productId) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const datePath = `${year}/${month}${day}`;
+  
+  // Генерируем хеш из URL или используем productId
+  // Формат хеша: 8 символов (буквы и цифры), как в примере: 5c2660a6f2
+  let hash = '';
+  if (imageUrl) {
+    // Создаем хеш из URL и productId
+    const hashString = imageUrl + String(productId);
+    // Используем base64 и берем только буквы и цифры, затем первые 8 символов
+    hash = btoa(hashString)
+      .replace(/[^a-z0-9]/gi, '')
+      .substring(0, 10)
+      .toLowerCase();
+    
+    // Если хеш слишком короткий, дополняем
+    while (hash.length < 8) {
+      hash += Math.random().toString(36).substring(2, 3);
+    }
+    hash = hash.substring(0, 10); // Берем 10 символов как в примере (5c2660a6f2)
+  } else {
+    hash = btoa(String(productId))
+      .replace(/[^a-z0-9]/gi, '')
+      .substring(0, 10)
+      .toLowerCase();
+    while (hash.length < 8) {
+      hash += Math.random().toString(36).substring(2, 3);
+    }
+    hash = hash.substring(0, 10);
+  }
+  
+  return `/storage/${datePath}/${hash}.jpg`;
+}
+
+// Функция для генерации пути фото категории (формат: /storage/YYYY/MMDD/003.jpg)
+// Где MMDD - месяц и день без разделителя (например: 1108 для 11 ноября)
+function generateCategoryPhotoPath(categoryId, isSubcategory = false) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const datePath = `${year}/${month}${day}`; // Формат: 2025/1108 (год/месяц+день)
+  
+  // Для категорий используем формат с нумерацией: 001.jpg, 002.jpg и т.д.
+  // Можно использовать порядковый номер категории
+  const photoNumber = String(categoryId).padStart(3, '0');
+  
+  return `/storage/${datePath}/${photoNumber}.jpg`;
+}
+
+// Функция для парсинга цены в копейки
+function parsePrice(priceStr) {
+  if (!priceStr) return 0;
+  
+  // Удаляем все кроме цифр и точки/запятой
+  const cleaned = priceStr.replace(/[^\d.,]/g, '').replace(',', '.');
+  const price = parseFloat(cleaned);
+  
+  if (isNaN(price)) return 0;
+  
+  // Конвертируем в копейки (умножаем на 100)
+  return Math.round(price * 100);
+}
+
+// Функция для извлечения SKU из названия или URL
+function extractSKU(name, url) {
+  // Ищем паттерны типа "SKU123", "CODE-456", "LPSTS42JD" и т.д.
+  const skuPatterns = [
+    /[A-Z]{2,}[0-9A-Z]{3,}/,  // Буквы + цифры/буквы
+    /[A-Z]+[0-9]+[A-Z]*/,      // Буквы + цифры
+    /[0-9]+[A-Z]+[0-9]*/       // Цифры + буквы
+  ];
+  
+  // Сначала проверяем название
+  for (const pattern of skuPatterns) {
+    const match = name.match(pattern);
+    if (match && match[0].length >= 4 && match[0].length <= 20) {
+      return match[0];
+    }
+  }
+  
+  // Потом проверяем URL
+  if (url) {
+    const urlParts = url.split('/');
+    for (const part of urlParts) {
+      for (const pattern of skuPatterns) {
+        const match = part.match(pattern);
+        if (match && match[0].length >= 4 && match[0].length <= 20) {
+          return match[0];
+        }
+      }
+    }
+  }
+  
+  // Если ничего не нашли, генерируем из названия
+  return transliterate(name).substring(0, 20).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'SKU' + Date.now();
+}
+
+// Функция для экранирования SQL строк
+function escapeSQL(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+// Конвертация в SQL миграцию
+function convertToSQL(data, dataType = 'products') {
+  if (dataType === 'categories') {
+    return convertCategoriesToSQL(data);
+  }
+  
+  if (!data || !data.products || data.products.length === 0) {
+    return '-- Нет товаров для экспорта\n';
+  }
+
+  const now = Math.floor(Date.now() / 1000); // Unix timestamp
+  let sql = `-- phpMyAdmin SQL Dump
+-- Generated by Category Parser Extension
+-- Generation Time: ${new Date().toLocaleString('ru-RU')}
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Dumping data for table \`products\`
+--
+
+INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_retail\`, \`price_whosale\`, \`description\`, \`created\`, \`updated\`) VALUES
+`;
+
+  const productValues = [];
+  const photoValues = [];
+  let productId = 1;
+  let photoId = 1;
+
+  data.products.forEach((product) => {
+    const sku = extractSKU(product.name || '', product.url || '');
+    const screenName = transliterate(product.name || 'product-' + productId);
+    const price = parsePrice(product.price || '0');
+    const photo = product.image || (product.images && product.images.length > 0 ? product.images[0] : '');
+    const photoPath = photo ? generatePhotoPath(photo, productId) : '';
+    
+    productValues.push(
+      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(product.name || '')}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${price}, ${price}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${now}, ${now})`
+    );
+
+    // Добавляем все фотографии в product_photos, но только валидные
+    const allImages = product.images && product.images.length > 0 
+      ? product.images.filter(img => img && img.trim().length > 0)
+      : (product.image && product.image.trim().length > 0 ? [product.image] : []);
+    
+    // Фильтруем дубликаты и пустые изображения
+    const uniqueImages = [];
+    const seenUrls = new Set();
+    
+    allImages.forEach((imgUrl) => {
+      if (!imgUrl || typeof imgUrl !== 'string') return;
+      const trimmed = imgUrl.trim();
+      if (trimmed.length < 10) return; // Минимальная длина для валидного URL
+      if (trimmed.startsWith('data:')) return; // Пропускаем data: URI
+      
+      // Нормализуем URL для проверки дубликатов (убираем параметры запроса)
+      const normalizedUrl = trimmed.split('?')[0].split('#')[0];
+      if (!seenUrls.has(normalizedUrl)) {
+        seenUrls.add(normalizedUrl);
+        uniqueImages.push(trimmed);
+      }
+    });
+    
+    uniqueImages.forEach((imgUrl, index) => {
+      let currentPhotoPath;
+      if (index === 0 && photoPath) {
+        // Первое изображение используем то же, что и в поле photo
+        currentPhotoPath = photoPath;
+      } else {
+        // Для остальных генерируем новый путь
+        currentPhotoPath = generatePhotoPath(imgUrl, productId + '_' + index);
+      }
+      
+      if (currentPhotoPath && currentPhotoPath.trim().length > 0) {
+        photoValues.push(
+          `(${photoId}, ${productId}, '${escapeSQL(currentPhotoPath)}')`
+        );
+        photoId++;
+      }
+    });
+
+    productId++;
+  });
+
+  sql += productValues.join(',\n') + ';\n\n';
+
+  if (photoValues.length > 0) {
+    sql += `--
+-- Dumping data for table \`product_photos\`
+--
+
+INSERT INTO \`product_photos\` (\`id\`, \`product_id\`, \`url\`) VALUES
+`;
+    sql += photoValues.join(',\n') + ';\n\n';
+  }
+
+  sql += `COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+`;
+
+  return sql;
+}
+
+// Конвертация категорий в SQL миграцию
+function convertCategoriesToSQL(data) {
+  if (!data || !data.categories || data.categories.length === 0) {
+    return '-- Нет категорий для экспорта\n';
+  }
+
+  let sql = `-- phpMyAdmin SQL Dump
+-- Generated by Category Parser Extension
+-- Generation Time: ${new Date().toLocaleString('ru-RU')}
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Dumping data for table \`categories\`
+--
+
+INSERT INTO \`categories\` (\`category_id\`, \`parent_id\`, \`sort_id\`, \`title\`, \`description\`, \`screen_name\`, \`screen_name_full\`, \`photo\`) VALUES
+`;
+
+  const categoryValues = [];
+  let categoryId = 1;
+  const categoryMap = new Map(); // Для связи ID парсера с реальным category_id
+
+  // Сначала обрабатываем корневые категории (parent_id = 0)
+  data.categories.forEach((category) => {
+    const screenName = transliterate(category.name || 'category-' + categoryId);
+    const photoPath = category.image ? generateCategoryPhotoPath(categoryId) : '';
+    
+    // Сохраняем маппинг для подкатегорий
+    categoryMap.set(category.id || categoryId, categoryId);
+    
+    categoryValues.push(
+      `(${categoryId}, 0, ${categoryId}, '${escapeSQL(category.name || '')}', ${category.description ? `'${escapeSQL(category.description)}'` : 'NULL'}, '${escapeSQL(screenName)}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}')`
+    );
+    
+    categoryId++;
+  });
+
+  // Затем обрабатываем подкатегории
+  data.categories.forEach((category) => {
+    if (category.subcategories && category.subcategories.length > 0) {
+      const parentCategoryId = categoryMap.get(category.id);
+      const parentScreenName = transliterate(category.name || 'category-' + parentCategoryId);
+      
+      category.subcategories.forEach((subcat) => {
+        const subScreenName = transliterate(subcat.name || 'subcategory-' + categoryId);
+        const subScreenNameFull = `${parentScreenName}/${subScreenName}`;
+        const photoPath = subcat.image ? generateCategoryPhotoPath(categoryId, true) : '';
+        
+        categoryValues.push(
+          `(${categoryId}, ${parentCategoryId}, 0, '${escapeSQL(subcat.name || '')}', ${subcat.description ? `'${escapeSQL(subcat.description)}'` : 'NULL'}, '${escapeSQL(subScreenName)}', '${escapeSQL(subScreenNameFull)}', '${escapeSQL(photoPath)}')`
+        );
+        
+        categoryId++;
+      });
+    }
+  });
+
+  sql += categoryValues.join(',\n') + ';\n\n';
+
+  sql += `COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+`;
+
+  return sql;
 }
 
