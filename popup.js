@@ -414,6 +414,17 @@ const results = await chrome.scripting.executeScript({
           try {
             // Используем новую функцию с переходом на страницу и выполнением JS
             const details = await fetchProductDetailsWithJS(tab, product.url, parseImages);
+            
+            // Обновляем цену если нашли на странице товара
+            if (details.price) {
+              product.price = details.price;
+            }
+            
+            // Сохраняем характеристики если нашли
+            if (details.specifications) {
+              product.specifications = details.specifications;
+            }
+            
             if (details.description) {
               description = details.description;
             }
@@ -458,7 +469,14 @@ const results = await chrome.scripting.executeScript({
           price: product.price || '',
           description: description || '',
           image: uniqueImages[0] || '',
-          images: uniqueImages
+          images: uniqueImages,
+          specifications: product.specifications || {
+            weight: null,
+            height: null,
+            width: null,
+            length: null,
+            volume: null
+          }
         });
 
         await new Promise(resolve => setTimeout(resolve, 150));
@@ -1670,6 +1688,69 @@ async function fetchProductDetailsWithJS(tab, url, parseImages = false) {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: (parseImages) => {
+        // Парсим ЦЕНУ из MuiTypography
+        let price = '';
+        const priceSelectors = [
+          '[data-testid*="dealerPrice"]',
+          '[data-testid*="price"]',
+          '[class*="MuiTypography-h1"]',
+          '[class*="MuiTypography"][class*="price"]',
+          '[class*="price"]'
+        ];
+        
+        for (const selector of priceSelectors) {
+          const priceElement = document.querySelector(selector);
+          if (priceElement) {
+            const priceText = (priceElement.innerText || priceElement.textContent || '').trim();
+            if (priceText && priceText.length > 0) {
+              price = priceText;
+              console.log(`✅ Найдена цена: ${price} (селектор: ${selector})`);
+              break;
+            }
+          }
+        }
+        
+        // Парсим ХАРАКТЕРИСТИКИ товара (Product Dimensions)
+        const specifications = {
+          weight: null,
+          height: null,
+          width: null,
+          length: null,
+          volume: null
+        };
+        
+        // Ищем все элементы с характеристиками
+        const specContainers = document.querySelectorAll('[class*="MuiGrid-container"][class*="MuiGrid-item"]');
+        specContainers.forEach(container => {
+          // Ищем пары название-значение
+          const labelElement = container.querySelector('[class*="css-mf42sb"]');
+          const valueElement = container.querySelector('[class*="css-zyb0l3"]');
+          
+          if (labelElement && valueElement) {
+            const label = (labelElement.innerText || labelElement.textContent || '').trim().toLowerCase();
+            const value = (valueElement.innerText || valueElement.textContent || '').trim();
+            
+            if (value) {
+              if (label.includes('weight')) {
+                specifications.weight = value;
+              } else if (label.includes('height')) {
+                specifications.height = value;
+              } else if (label.includes('width')) {
+                specifications.width = value;
+              } else if (label.includes('length')) {
+                specifications.length = value;
+              } else if (label.includes('volume')) {
+                specifications.volume = value;
+              }
+            }
+          }
+        });
+        
+        const hasSpecs = Object.values(specifications).some(v => v !== null);
+        if (hasSpecs) {
+          console.log(`✅ Найдены характеристики:`, specifications);
+        }
+        
         // Парсим описание ТОЛЬКО из ProductBasicDetails li элементов
         let description = '';
         const productBasicDetailsSelectors = [
@@ -1702,27 +1783,67 @@ async function fetchProductDetailsWithJS(tab, url, parseImages = false) {
           }
         }
         
-        // Парсим изображения если нужно
+        // Парсим изображения ТОЛЬКО из карусели товара
         const images = [];
         if (parseImages) {
           const seenImages = new Set();
-          document.querySelectorAll('img').forEach(img => {
-            const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-            if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
-              try {
-                const resolved = new URL(src, window.location.href).href;
-                if (!seenImages.has(resolved)) {
-                  seenImages.add(resolved);
-                  images.push(resolved);
-                }
-              } catch (e) {
-                // ignore
-              }
+          
+          // Ищем карусель изображений товара
+          const carouselSelectors = [
+            '[class*="ImageCarousel"]',
+            '[class*="imageCarousel"]',
+            '[class*="product-gallery"]',
+            '[class*="product-images"]',
+            '[class*="ProductGallery"]'
+          ];
+          
+          let carouselContainer = null;
+          for (const selector of carouselSelectors) {
+            carouselContainer = document.querySelector(selector);
+            if (carouselContainer) {
+              console.log(`✅ Найдена карусель изображений: ${selector}`);
+              break;
             }
-          });
+          }
+          
+          // Если нашли карусель - парсим только из неё
+          if (carouselContainer) {
+            carouselContainer.querySelectorAll('img').forEach(img => {
+              const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+              if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
+                try {
+                  const resolved = new URL(src, window.location.href).href;
+                  if (!seenImages.has(resolved)) {
+                    seenImages.add(resolved);
+                    images.push(resolved);
+                  }
+                } catch (e) {
+                  // ignore
+                }
+              }
+            });
+            console.log(`📷 Найдено изображений в карусели: ${images.length}`);
+          } else {
+            // Если карусели нет - используем старую логику (все img на странице)
+            console.log(`⚠️ Карусель не найдена, парсим все изображения`);
+            document.querySelectorAll('img').forEach(img => {
+              const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+              if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
+                try {
+                  const resolved = new URL(src, window.location.href).href;
+                  if (!seenImages.has(resolved)) {
+                    seenImages.add(resolved);
+                    images.push(resolved);
+                  }
+                } catch (e) {
+                  // ignore
+                }
+              }
+            });
+          }
         }
         
-        return { description, images };
+        return { price, description, images, specifications };
       },
       args: [parseImages]
     });
@@ -2243,18 +2364,12 @@ function generateCategoryPhotoPath(categoryId, isSubcategory = false) {
   return `/storage/${datePath}/${photoNumber}.jpg`;
 }
 
-// Функция для парсинга цены в копейки
+// Функция для обработки цены (сохраняет исходный формат)
 function parsePrice(priceStr) {
-  if (!priceStr) return 0;
+  if (!priceStr || priceStr.trim() === '') return null;
   
-  // Удаляем все кроме цифр и точки/запятой
-  const cleaned = priceStr.replace(/[^\d.,]/g, '').replace(',', '.');
-  const price = parseFloat(cleaned);
-  
-  if (isNaN(price)) return 0;
-  
-  // Конвертируем в копейки (умножаем на 100)
-  return Math.round(price * 100);
+  // Возвращаем цену в исходном формате как на сайте
+  return priceStr.trim();
 }
 
 // Функция для извлечения SKU из названия или URL
@@ -2329,7 +2444,7 @@ SET time_zone = "+00:00";
 -- Dumping data for table \`products\`
 --
 
-INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_retail\`, \`price_whosale\`, \`description\`, \`created\`, \`updated\`) VALUES
+INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_whosale\`, \`description\`, \`weight\`, \`height\`, \`width\`, \`length\`, \`volume\`, \`created\`, \`updated\`) VALUES
 `;
 
   const productValues = [];
@@ -2340,12 +2455,23 @@ INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort
   data.products.forEach((product) => {
     const sku = extractSKU(product.name || '', product.url || '');
     const screenName = transliterate(product.name || 'product-' + productId);
-    const price = parsePrice(product.price || '0');
+    const price = parsePrice(product.price || '');
     const photo = product.image || (product.images && product.images.length > 0 ? product.images[0] : '');
     const photoPath = photo ? generatePhotoPath(photo, productId) : '';
     
+    // Форматируем цену: если null - пишем NULL, иначе строку в кавычках
+    const priceWhosale = price !== null ? `'${escapeSQL(price)}'` : 'NULL';
+    
+    // Форматируем характеристики: если есть - в кавычках, если нет - NULL
+    const specs = product.specifications || {};
+    const weight = specs.weight ? `'${escapeSQL(specs.weight)}'` : 'NULL';
+    const height = specs.height ? `'${escapeSQL(specs.height)}'` : 'NULL';
+    const width = specs.width ? `'${escapeSQL(specs.width)}'` : 'NULL';
+    const length = specs.length ? `'${escapeSQL(specs.length)}'` : 'NULL';
+    const volume = specs.volume ? `'${escapeSQL(specs.volume)}'` : 'NULL';
+    
     productValues.push(
-      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(product.name || '')}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${price}, ${price}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${now}, ${now})`
+      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(product.name || '')}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${priceWhosale}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${weight}, ${height}, ${width}, ${length}, ${volume}, ${now}, ${now})`
     );
 
     // Добавляем все фотографии в product_photos, но только валидные
