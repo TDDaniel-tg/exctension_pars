@@ -51,12 +51,13 @@ document.addEventListener('DOMContentLoaded', function() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const parseImages = parseImagesCheckbox.checked;
       
-      // Основной парсинг
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        function: parseCategories,
-        args: [parseImages]
-      });
+     // Основной парсинг
+const results = await chrome.scripting.executeScript({
+  target: { tabId: tab.id },
+  func: parseCategories,
+  args: [parseImages],
+  world: 'MAIN' // Добавляем это для обхода CSP
+});
 
       if (results && results[0] && results[0].result) {
         parsedDataType = 'categories';
@@ -114,8 +115,9 @@ document.addEventListener('DOMContentLoaded', function() {
       statusDiv.textContent = '📋 Шаг 1: Сбор категорий с главной страницы...';
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        function: parseCategories,
-        args: [parseImages]
+        func: parseCategories,
+        args: [parseImages],
+        world: 'MAIN'
       });
 
       if (!results || !results[0] || !results[0].result) {
@@ -176,8 +178,9 @@ document.addEventListener('DOMContentLoaded', function() {
           // Парсим подкатегории на загруженной странице
           const subcatResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            function: parseCategories,
-            args: [parseImages]
+            func: parseCategories,
+            args: [parseImages],
+            world: 'MAIN'
           });
           
           const subcats = subcatResults && subcatResults[0] && subcatResults[0].result 
@@ -359,12 +362,13 @@ document.addEventListener('DOMContentLoaded', function() {
       const parseImages = parseImagesCheckbox.checked;
 
       // Шаг 1: парсим текущую страницу
-      statusDiv.textContent = '📋 Сбор товаров с текущей страницы...';
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        function: parseProducts,
-        args: [true] // собираем базовые изображения сразу
-      });
+statusDiv.textContent = '📋 Сбор товаров с текущей страницы...';
+const results = await chrome.scripting.executeScript({
+  target: { tabId: tab.id },
+  func: parseProducts,
+  args: [true], // собираем базовые изображения сразу
+  world: 'MAIN' // Добавляем это для обхода CSP
+});
 
       if (!results || !results[0] || !results[0].result || !results[0].result.products) {
         throw new Error('Не удалось получить список товаров');
@@ -970,7 +974,7 @@ async function fetchSubcategories(url, parseImages = false) {
   }
 }
 
-// Функция парсинга (выполняется на странице)
+// Функция парсинга категорий (выполняется на странице)
 async function parseCategories(parseImages = false) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   
@@ -1356,6 +1360,80 @@ async function parseCategories(parseImages = false) {
   };
 }
 
+// Функция для парсинга описания по вашему селектору
+function parseDescriptionBySelector(element) {
+  // Ищем по классу ProductBasicDetails (более гибкий селектор, так как хеш может меняться)
+  const productBasicDetailsSelectors = [
+    '[class*="ProductBasicDetails"]',
+    '[class*="ProductBasicDetails_StyledList"]',
+    '.MuiTypography-root[class*="ProductBasicDetails"]',
+    'ul[class*="ProductBasicDetails"]',
+    '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
+  ];
+
+  // Сначала ищем по классу ProductBasicDetails
+  for (const selector of productBasicDetailsSelectors) {
+    const descriptionElement = element.querySelector(selector);
+    
+    if (descriptionElement) {
+      console.log(`✅ Найден элемент описания по селектору: ${selector}`);
+      
+      // Парсим содержимое списка - ищем все li внутри
+      const listItems = descriptionElement.querySelectorAll('li');
+      if (listItems.length > 0) {
+        const descriptions = [];
+        listItems.forEach(li => {
+          // Используем innerText для более точного извлечения видимого текста
+          const text = (li.innerText || li.textContent || '').trim();
+          if (text && text.length > 0) {
+            descriptions.push(text);
+          }
+        });
+        if (descriptions.length > 0) {
+          const fullDescription = descriptions.join('\n').trim();
+          console.log(`✅ Извлечено ${descriptions.length} пунктов описания, длина: ${fullDescription.length}`);
+          return fullDescription;
+        }
+      } else {
+        // Если нет li, пробуем взять весь текст элемента
+        const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
+        if (text && text.length > 10) {
+          console.log(`✅ Извлечено описание напрямую из элемента, длина: ${text.length}`);
+          return text;
+        }
+      }
+    }
+  }
+
+  // Если не нашли по ProductBasicDetails, пробуем другие селекторы
+  const descriptionSelectors = [
+    '[class*="description"]', 
+    '.product-description', 
+    '.desc', 
+    '[data-description]',
+    '[class*="summary"]',
+    '[class*="short-desc"]',
+    '[class*="long-desc"]',
+    '[class*="detail"]',
+    '[class*="info"]',
+    '[class*="spec"]',
+    '[class*="feature"]'
+  ];
+
+  for (const selector of descriptionSelectors) {
+    const found = element.querySelector(selector);
+    if (found) {
+      const text = (found.innerText || found.textContent || '').trim();
+      if (text && text.length > 10) {
+        return text;
+      }
+    }
+  }
+
+  return '';
+}
+
+// Функция парсинга товаров (обновленная с вашим селектором)
 async function parseProducts(parseImages = false) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -1455,27 +1533,20 @@ async function parseProducts(parseImages = false) {
     }
   };
 
-  // Функция валидации изображений - проверяет, что изображение валидное и не пустое
-  // Ослабленная валидация - не блокируем товары без изображений
+  // Функция валидации изображений
   const isValidImage = (src) => {
     if (!src || typeof src !== 'string') return false;
     
     const trimmed = src.trim();
-    
-    // Проверяем минимальную длину (снизил до 5 для более гибкой валидации)
     if (trimmed.length < 5) return false;
     
-    // Пропускаем data: URI только если это явно placeholder
     if (trimmed.startsWith('data:image/svg+xml')) {
-      // SVG может быть валидным
-      return trimmed.length > 50; // Минимальная длина для валидного SVG
+      return trimmed.length > 50;
     }
     if (trimmed.startsWith('data:') && trimmed.length < 100) {
-      // Очень короткие data: URI - скорее всего placeholder
       return false;
     }
     
-    // Пропускаем явные placeholder изображения только если они не полные URL
     const lowerSrc = trimmed.toLowerCase();
     const strictPlaceholderPatterns = [
       '1x1.gif',
@@ -1486,18 +1557,15 @@ async function parseProducts(parseImages = false) {
       '0x0'
     ];
     
-    // Строгая проверка только для явных placeholder файлов
     if (strictPlaceholderPatterns.some(pattern => lowerSrc.endsWith(pattern))) {
       if (!lowerSrc.startsWith('http://') && !lowerSrc.startsWith('https://')) {
         return false;
       }
     }
     
-    // Проверяем расширения изображений
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico'];
     const hasImageExtension = imageExtensions.some(ext => lowerSrc.includes(ext));
     
-    // Если есть расширение или это полный URL - разрешаем
     if (hasImageExtension || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('/') || trimmed.startsWith('//')) {
       return true;
     }
@@ -1509,13 +1577,10 @@ async function parseProducts(parseImages = false) {
     for (const selector of selectors) {
       const found = element.querySelector(selector);
       if (found) {
-        // Собираем полный текст из всех дочерних элементов
         let fullText = '';
-        // Используем innerText для более точного извлечения видимого текста
         if (found.innerText) {
           fullText = found.innerText.trim();
         } else {
-          // Если innerText недоступен, собираем текст из всех текстовых узлов
           const walker = document.createTreeWalker(
             found,
             NodeFilter.SHOW_TEXT,
@@ -1544,9 +1609,7 @@ async function parseProducts(parseImages = false) {
   const addProduct = (product) => {
     if (!product) return;
     
-    // Если нет URL, но есть название - создаём уникальный ключ
     if (!product.url) {
-      // Используем название + индекс как ключ для товаров без URL
       const key = product.name ? `no-url-${product.name}-${productsMap.size}` : `no-url-${productsMap.size}`;
       if (!productsMap.has(key)) {
         productsMap.set(key, product);
@@ -1554,17 +1617,78 @@ async function parseProducts(parseImages = false) {
       return;
     }
     
-    // Если есть URL, используем его как ключ (но разрешаем дубликаты с разными названиями)
     const urlKey = product.url;
     const existing = productsMap.get(urlKey);
     
-    // Если товар с таким URL уже есть, но название отличается - добавляем как новый
     if (existing && existing.name !== product.name) {
       const uniqueKey = `${urlKey}-${productsMap.size}`;
       productsMap.set(uniqueKey, product);
     } else if (!existing) {
       productsMap.set(urlKey, product);
     }
+  };
+
+  // Локальная функция для извлечения описания (копия глобальной, чтобы работала в контексте страницы)
+  const extractDescriptionFromElement = (element) => {
+    if (!element) return '';
+
+    const productBasicDetailsSelectors = [
+      '[class*="ProductBasicDetails"]',
+      '[class*="ProductBasicDetails_StyledList"]',
+      '.MuiTypography-root[class*="ProductBasicDetails"]',
+      'ul[class*="ProductBasicDetails"]',
+      '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
+    ];
+
+    for (const selector of productBasicDetailsSelectors) {
+      const descriptionElement = element.querySelector(selector);
+      if (descriptionElement) {
+        const listItems = descriptionElement.querySelectorAll('li');
+        if (listItems.length > 0) {
+          const descriptions = [];
+          listItems.forEach(li => {
+            const text = (li.innerText || li.textContent || '').trim();
+            if (text && text.length > 0) {
+              descriptions.push(text);
+            }
+          });
+          if (descriptions.length > 0) {
+            return descriptions.join('\n').trim();
+          }
+        }
+
+        const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
+        if (text && text.length > 10) {
+          return text;
+        }
+      }
+    }
+
+    const descriptionSelectors = [
+      '[class*="description"]',
+      '.product-description',
+      '.desc',
+      '[data-description]',
+      '[class*="summary"]',
+      '[class*="short-desc"]',
+      '[class*="long-desc"]',
+      '[class*="detail"]',
+      '[class*="info"]',
+      '[class*="spec"]',
+      '[class*="feature"]'
+    ];
+
+    for (const selector of descriptionSelectors) {
+      const found = element.querySelector(selector);
+      if (found) {
+        const text = (found.innerText || found.textContent || '').trim();
+        if (text && text.length > 10) {
+          return text;
+        }
+      }
+    }
+
+    return '';
   };
 
   productSelectors.forEach(selector => {
@@ -1579,13 +1703,10 @@ async function parseProducts(parseImages = false) {
         return;
       }
 
-      // Минимальный текстовый контент для отсечения пустых блоков-обёрток (снизил до 3)
       if (element.textContent.replace(/\s+/g, ' ').trim().length < 3) {
         return;
       }
 
-      // Проверяем, не является ли это дубликатом по URL, а не по элементу
-      // Это позволяет парсить товары, которые могут быть в разных контейнерах
       seenElements.add(element);
 
       const link = element.querySelector('a[href]');
@@ -1602,90 +1723,82 @@ async function parseProducts(parseImages = false) {
       }
 
       const name = extractText(element, ['[class*="name"]', '[class*="title"]', 'h2', 'h3', 'h4', '.product-name']) || (link ? link.textContent.trim() : '');
-      // Ослабил проверку - разрешаем названия до 300 символов и минимум 1 символ
       if (!name || name.length < 1 || name.length > 300) {
         return;
       }
 
       const price = extractText(element, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
       
-      // Агрессивный парсинг описания - собираем ВСЁ, что не является названием или ценой
-      let description = extractText(element, [
-        '[class*="description"]', 
-        '.product-description', 
-        '.desc', 
-        '[data-description]',
-        '[class*="summary"]',
-        '[class*="short-desc"]',
-        '[class*="long-desc"]',
-        '[class*="detail"]',
-        '[class*="info"]',
-        '[class*="spec"]',
-        '[class*="feature"]'
-      ]) || element.getAttribute('data-description') || '';
+      // ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ ПАРСИНГА ОПИСАНИЯ
+      let description = extractDescriptionFromElement(element);
       
-      // Если описание не найдено или короткое, собираем ВСЕ текстовые элементы
-      if (!description || description.length < 20) {
-        // Получаем весь текст элемента
-        const allText = element.innerText || element.textContent || '';
+      // Если не нашли описание по селекторам, пробуем альтернативные методы
+      if (!description || description.length < 10) {
+        description = extractText(element, [
+          '[class*="description"]', 
+          '.product-description', 
+          '.desc', 
+          '[data-description]',
+          '[class*="summary"]',
+          '[class*="short-desc"]',
+          '[class*="long-desc"]',
+          '[class*="detail"]',
+          '[class*="info"]',
+          '[class*="spec"]',
+          '[class*="feature"]'
+        ]) || element.getAttribute('data-description') || '';
         
-        // Убираем название и цену из текста
-        let cleanText = allText;
-        if (name) {
-          cleanText = cleanText.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-        }
-        if (price) {
-          cleanText = cleanText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-        }
-        
-        // Убираем служебные слова и короткие фразы
-        cleanText = cleanText
-          .replace(/\s+/g, ' ')
-          .replace(/\b(Add to Cart|Buy Now|View Details|Learn More|Read More|See More|Shop Now|Add|Cart|Buy|View|Details|More|Now)\b/gi, '')
-          .trim();
-        
-        // Если осталось достаточно текста, используем его как описание
-        if (cleanText.length > 15) {
-          // Берем первые 500 символов, чтобы не было слишком длинно
-          description = cleanText.substring(0, 500).trim();
-        } else {
-          // Если всё ещё мало текста, ищем в дочерних элементах
-          const descElements = element.querySelectorAll('p, span, div, li, td, [class*="text"], [class*="info"], [class*="detail"], [class*="desc"]');
-          const descTexts = [];
-          descElements.forEach(descEl => {
-            // Пропускаем элементы, которые уже использованы для названия или цены
-            if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]') || descEl.closest('a')) {
-              return;
+        // Если всё ещё нет описания, собираем весь текст
+        if (!description || description.length < 10) {
+          const allText = element.innerText || element.textContent || '';
+          let cleanText = allText;
+          if (name) {
+            cleanText = cleanText.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+          }
+          if (price) {
+            cleanText = cleanText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+          }
+          
+          cleanText = cleanText
+            .replace(/\s+/g, ' ')
+            .replace(/\b(Add to Cart|Buy Now|View Details|Learn More|Read More|See More|Shop Now|Add|Cart|Buy|View|Details|More|Now)\b/gi, '')
+            .trim();
+          
+          if (cleanText.length > 15) {
+            description = cleanText.substring(0, 500).trim();
+          } else {
+            const descElements = element.querySelectorAll('p, span, div, li, td, [class*="text"], [class*="info"], [class*="detail"], [class*="desc"]');
+            const descTexts = [];
+            descElements.forEach(descEl => {
+              if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]') || descEl.closest('a')) {
+                return;
+              }
+              const text = descEl.innerText || descEl.textContent;
+              if (text && text.trim().length > 5) {
+                let cleanElText = text;
+                if (name) {
+                  cleanElText = cleanElText.replace(new RegExp(name.substring(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+                }
+                if (price) {
+                  cleanElText = cleanElText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+                }
+                cleanElText = cleanElText.trim();
+                if (cleanElText.length > 5) {
+                  descTexts.push(cleanElText);
+                }
+              }
+            });
+            if (descTexts.length > 0) {
+              description = descTexts.join(' ').trim().substring(0, 500);
             }
-            const text = descEl.innerText || descEl.textContent;
-            if (text && text.trim().length > 5) {
-              // Убираем название и цену из текста элемента
-              let cleanElText = text;
-              if (name) {
-                cleanElText = cleanElText.replace(new RegExp(name.substring(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-              }
-              if (price) {
-                cleanElText = cleanElText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-              }
-              cleanElText = cleanElText.trim();
-              if (cleanElText.length > 5) {
-                descTexts.push(cleanElText);
-              }
-            }
-          });
-          if (descTexts.length > 0) {
-            description = descTexts.join(' ').trim().substring(0, 500);
           }
         }
       }
 
-      // Добавляем товар даже если нет цены и описания, если есть название и URL
-      // Это важно для парсинга всех товаров
+      // Добавляем товар даже если нет цены и описания
       if (!price && !description) {
         const textContent = element.textContent.replace(/\s+/g, ' ').trim();
-        // Снизил минимальную длину до 10, чтобы парсить больше товаров
         if (textContent.length < 10) {
-          // Всё равно добавляем товар, но помечаем пустые поля
           addProduct({
             name,
             url: productUrl,
@@ -1708,11 +1821,9 @@ async function parseProducts(parseImages = false) {
           src = img.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
         }
         
-        // Валидируем изображение перед добавлением
         if (src && isValidImage(src)) {
           const resolved = resolveImageUrl(src);
           
-          // Дополнительная проверка после разрешения URL
           if (resolved && isValidImage(resolved)) {
             if (!primaryImage) {
               primaryImage = resolved;
@@ -1728,11 +1839,9 @@ async function parseProducts(parseImages = false) {
         imagesSet.add(primaryImage);
       }
 
-      // Фильтруем пустые изображения перед сохранением, но не блокируем товар без изображений
       const validImages = Array.from(imagesSet).filter(img => img && isValidImage(img));
       const finalPrimaryImage = primaryImage && isValidImage(primaryImage) ? primaryImage : (validImages.length > 0 ? validImages[0] : '');
 
-      // Добавляем товар даже если нет изображений
       addProduct({
         name,
         url: productUrl,
@@ -1745,7 +1854,9 @@ async function parseProducts(parseImages = false) {
   });
 
   // Резервный парсинг: сканируем все ссылки и ищем те, что похожи на товары
-  if (productsMap.size === 0) {
+  // ИЗМЕНИЛ УСЛОВИЕ: теперь запускаем резервный парсинг, если найдено меньше товаров, чем ожидается
+  // Это поможет найти все товары, даже если основные селекторы пропустили некоторые
+  if (productsMap.size < 10) {
     console.log('⚠️ Основные селекторы не дали результата, запускаю резервный поиск по ссылкам');
     const allLinks = document.querySelectorAll('a[href]');
     const productKeywords = ['product', 'item', 'goods', 'catalog', 'shop', 'sku'];
@@ -1784,23 +1895,28 @@ async function parseProducts(parseImages = false) {
       const imagesSet = new Set();
 
       price = extractText(parent, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
-      description = extractText(parent, ['[class*="description"]', '.product-description', '.desc', '[data-description]']);
       
-      // Если описание короткое, пробуем собрать из других элементов
+      // ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ ПАРСИНГА ОПИСАНИЯ
+      description = extractDescriptionFromElement(parent);
+      
       if (!description || description.length < 10) {
-        const descElements = parent.querySelectorAll('[class*="text"], [class*="info"], [class*="detail"], p, span[class*="desc"]');
-        const descTexts = [];
-        descElements.forEach(descEl => {
-          if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]')) {
-            return;
+        description = extractText(parent, ['[class*="description"]', '.product-description', '.desc', '[data-description]']);
+        
+        if (!description || description.length < 10) {
+          const descElements = parent.querySelectorAll('[class*="text"], [class*="info"], [class*="detail"], p, span[class*="desc"]');
+          const descTexts = [];
+          descElements.forEach(descEl => {
+            if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]')) {
+              return;
+            }
+            const text = descEl.innerText || descEl.textContent;
+            if (text && text.trim().length > 10) {
+              descTexts.push(text.trim());
+            }
+          });
+          if (descTexts.length > 0) {
+            description = descTexts.join(' ').trim();
           }
-          const text = descEl.innerText || descEl.textContent;
-          if (text && text.trim().length > 10) {
-            descTexts.push(text.trim());
-          }
-        });
-        if (descTexts.length > 0) {
-          description = descTexts.join(' ').trim();
         }
       }
 
@@ -1814,11 +1930,9 @@ async function parseProducts(parseImages = false) {
           src = img.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
         }
         
-        // Валидируем изображение перед добавлением
         if (src && isValidImage(src)) {
           const resolved = resolveImageUrl(src);
           
-          // Дополнительная проверка после разрешения URL
           if (resolved && isValidImage(resolved)) {
             if (!primaryImage) {
               primaryImage = resolved;
@@ -1834,11 +1948,9 @@ async function parseProducts(parseImages = false) {
         imagesSet.add(primaryImage);
       }
 
-      // Фильтруем пустые изображения перед сохранением, но не блокируем товар без изображений
       const validImages = Array.from(imagesSet).filter(img => img && isValidImage(img));
       const finalPrimaryImage = primaryImage && isValidImage(primaryImage) ? primaryImage : (validImages.length > 0 ? validImages[0] : '');
 
-      // Добавляем товар даже если нет изображений
       addProduct({
         name: text,
         url,
@@ -1878,6 +1990,7 @@ async function parseProducts(parseImages = false) {
   };
 }
 
+// Обновленная функция fetchProductDetails с вашим селектором
 async function fetchProductDetails(url, parseImages = false) {
   try {
     if (!url) {
@@ -1895,91 +2008,121 @@ async function fetchProductDetails(url, parseImages = false) {
     const doc = parser.parseFromString(html, 'text/html');
 
     let description = '';
-    const descSelectors = [
-      '[class*="description"]',
-      '.product-description',
-      '#description',
-      '.tab-description',
-      '.short-description',
-      '[class*="detail"]',
-      '[class*="info"]',
-      '[class*="content"]',
-      'main [class*="text"]',
-      'article [class*="text"]'
-    ];
+    
+    // Функция для парсинга описания по классу ProductBasicDetails
+    const parseDescriptionBySelector = (doc) => {
+      // Ищем по классу ProductBasicDetails (более гибкий селектор)
+      const productBasicDetailsSelectors = [
+        '[class*="ProductBasicDetails"]',
+        '[class*="ProductBasicDetails_StyledList"]',
+        '.MuiTypography-root[class*="ProductBasicDetails"]',
+        'ul[class*="ProductBasicDetails"]',
+        '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
+      ];
 
-    // Функция для сбора полного текста из элемента
-    const getFullText = (element) => {
-      if (!element) return '';
-      
-      // Сначала пробуем innerText (более точный для видимого текста)
-      if (element.innerText) {
-        return element.innerText.trim();
-      }
-      
-      // Если innerText недоступен, собираем из всех текстовых узлов
-      const textNodes = [];
-      const walker = doc.createTreeWalker(
-        element,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode: function(node) {
-            // Пропускаем скрипты и стили
-            const parent = node.parentElement;
-            if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
-              return NodeFilter.FILTER_REJECT;
+      // Сначала ищем по классу ProductBasicDetails
+      for (const selector of productBasicDetailsSelectors) {
+        const descriptionElement = doc.querySelector(selector);
+        
+        if (descriptionElement) {
+          console.log(`✅ Найден элемент описания по селектору на странице товара: ${selector}`);
+          
+          // Парсим содержимое списка - ищем все li внутри
+          const listItems = descriptionElement.querySelectorAll('li');
+          if (listItems.length > 0) {
+            const descriptions = [];
+            listItems.forEach(li => {
+              // Используем innerText для более точного извлечения видимого текста
+              const text = (li.innerText || li.textContent || '').trim();
+              if (text && text.length > 0) {
+                descriptions.push(text);
+              }
+            });
+            if (descriptions.length > 0) {
+              const fullDescription = descriptions.join('\n').trim();
+              console.log(`✅ Извлечено ${descriptions.length} пунктов описания со страницы товара, длина: ${fullDescription.length}`);
+              return fullDescription;
             }
-            return NodeFilter.FILTER_ACCEPT;
+          } else {
+            // Если нет li, пробуем взять весь текст элемента
+            const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
+            if (text && text.length > 10) {
+              console.log(`✅ Извлечено описание напрямую из элемента на странице товара, длина: ${text.length}`);
+              return text;
+            }
           }
-        },
-        false
-      );
-      
-      let node;
-      while (node = walker.nextNode()) {
-        const text = node.textContent.trim();
-        if (text && text.length > 0) {
-          textNodes.push(text);
         }
       }
-      
-      return textNodes.join(' ').trim();
+      return '';
     };
 
-    // Ищем описание по селекторам
-    for (const selector of descSelectors) {
-      const elements = doc.querySelectorAll(selector);
-      if (elements.length > 0) {
-        // Собираем текст из всех найденных элементов
-        const texts = [];
-        elements.forEach(element => {
-          const text = getFullText(element);
-          if (text && text.length > 5) {
-            texts.push(text);
-          }
-        });
-        
-        if (texts.length > 0) {
-          // Объединяем все тексты, убирая дубликаты
-          description = texts.join('\n\n').trim();
-          break;
-        }
-      }
-    }
+    // Сначала пробуем найти описание по классу ProductBasicDetails
+    description = parseDescriptionBySelector(doc);
 
-    // Если не нашли, ищем в основных контентных блоках
+    // Если не нашли, используем стандартные методы
     if (!description || description.length < 10) {
-      const mainContent = doc.querySelector('main, article, [class*="product-detail"], [class*="product-info"]');
-      if (mainContent) {
-        // Исключаем уже найденные элементы (название, цену и т.д.)
-        const excludeSelectors = ['header', 'nav', 'footer', '[class*="price"]', '[class*="title"]', '[class*="name"]', '[class*="image"]', '[class*="gallery"]'];
-        excludeSelectors.forEach(sel => {
-          mainContent.querySelectorAll(sel).forEach(el => el.remove());
-        });
+      const descSelectors = [
+        '[class*="description"]',
+        '.product-description',
+        '#description',
+        '.tab-description',
+        '.short-description',
+        '[class*="detail"]',
+        '[class*="info"]',
+        '[class*="content"]',
+        'main [class*="text"]',
+        'article [class*="text"]'
+      ];
+
+      const getFullText = (element) => {
+        if (!element) return '';
         
-        const mainText = getFullText(mainContent);
-        if (mainText && mainText.length > description.length) {
-          description = mainText;
+        if (element.innerText) {
+          return element.innerText.trim();
+        }
+        
+        const textNodes = [];
+        const walker = doc.createTreeWalker(
+          element,
+          NodeFilter.SHOW_TEXT,
+          {
+            acceptNode: function(node) {
+              const parent = node.parentElement;
+              if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              return NodeFilter.FILTER_ACCEPT;
+            }
+          },
+          false
+        );
+        
+        let node;
+        while (node = walker.nextNode()) {
+          const text = node.textContent.trim();
+          if (text && text.length > 0) {
+            textNodes.push(text);
+          }
+        }
+        
+        return textNodes.join(' ').trim();
+      };
+
+      for (const selector of descSelectors) {
+        const elements = doc.querySelectorAll(selector);  
+        if (elements.length > 0) {
+          const texts = [];
+          elements.forEach(element => {
+            const text = getFullText(element);
+            if (text && text.length > 5) {
+              texts.push(text);
+            }
+          });
+          
+          if (texts.length > 0) {
+            description = texts.join('\n\n').trim();
+            break;
+          }
         }
       }
     }
@@ -2723,4 +2866,3 @@ INSERT INTO \`categories\` (\`category_id\`, \`parent_id\`, \`sort_id\`, \`title
 
   return sql;
 }
-
