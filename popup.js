@@ -387,6 +387,8 @@ const results = await chrome.scripting.executeScript({
       console.log(`📋 Товаров для парсинга: ${productsToProcess.length}`);
 
       const detailedProducts = [];
+      // Сохраняем URL исходной страницы для возврата
+      const originalUrl = tab.url;
       let totalImages = 0;
 
       for (let i = 0; i < productsToProcess.length; i++) {
@@ -410,7 +412,8 @@ const results = await chrome.scripting.executeScript({
 
         if (product.url) {
           try {
-            const details = await fetchProductDetails(product.url, parseImages);
+            // Используем новую функцию с переходом на страницу и выполнением JS
+            const details = await fetchProductDetailsWithJS(tab, product.url, parseImages);
             if (details.description) {
               description = details.description;
             }
@@ -460,6 +463,19 @@ const results = await chrome.scripting.executeScript({
 
         await new Promise(resolve => setTimeout(resolve, 150));
       }
+      
+      // Возвращаемся на исходную страницу после парсинга всех товаров
+      console.log(`🔙 Возврат на исходную страницу: ${originalUrl}`);
+      await chrome.tabs.update(tab.id, { url: originalUrl });
+      await new Promise((resolve) => {
+        const listener = (tabId, changeInfo) => {
+          if (tabId === tab.id && changeInfo.status === 'complete') {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+      });
 
       parsedDataType = 'products';
       parsedData = {
@@ -790,189 +806,6 @@ const results = await chrome.scripting.executeScript({
     clearBtn.disabled = true;
   });
 });
-
-// Функция для получения подкатегорий со страницы категории
-async function fetchSubcategories(url, parseImages = false) {
-  try {
-    console.log(`  🌐 Загрузка страницы: ${url}`);
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const html = await response.text();
-    console.log(`  ✅ Страница загружена, размер: ${html.length} байт`);
-    
-    // Создаем временный DOM для парсинга
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    
-    // Исключаем навигацию
-    const excludeSelectors = ['header', 'nav', 'footer', '.header', '.nav', '.navigation', '.navbar', '.footer', '.menu', '.top-menu', '.main-menu'];
-    excludeSelectors.forEach(selector => {
-      doc.querySelectorAll(selector).forEach(el => el.remove());
-    });
-    console.log(`  🗑️ Исключено элементов навигации`);
-    
-    // Ищем подкатегории (ссылки в основном контенте)
-    const subcategories = [];
-    const links = doc.querySelectorAll('a[href]');
-    const uniqueUrls = new Set();
-    
-    console.log(`  🔗 Всего ссылок на странице: ${links.length}`);
-    
-    links.forEach(link => {
-      const text = link.textContent.trim();
-      const href = link.getAttribute('href');
-      
-      if (!text || !href || href.includes('#')) return;
-      if (text.length < 2 || text.length > 200) return;
-      
-      // Преобразуем относительные ссылки в абсолютные
-      let fullUrl;
-      try {
-        fullUrl = new URL(href, url).href;
-      } catch {
-        return;
-      }
-      
-      if (!uniqueUrls.has(fullUrl)) {
-        const subcat = {
-          name: text,
-          url: fullUrl
-        };
-        
-        // Ищем изображение если нужно
-        if (parseImages) {
-          let imgSrc = '';
-          
-          // СНАЧАЛА ищем внутри самой ссылки
-          const imgsInLink = link.querySelectorAll('img');
-          if (imgsInLink.length > 0) {
-            for (const img of imgsInLink) {
-              const allAttributes = Array.from(img.attributes);
-              
-              imgSrc = img.currentSrc || 
-                       img.src || 
-                       img.getAttribute('data-src') || 
-                       img.getAttribute('data-lazy-src') ||
-                       img.getAttribute('data-original') ||
-                       img.getAttribute('srcset') ||
-                       img.getAttribute('data-image') ||
-                       img.getAttribute('data-url') ||
-                       '';
-              
-              // Ищем в любых data-* атрибутах
-              if (!imgSrc) {
-                for (const attr of allAttributes) {
-                  if ((attr.name.startsWith('data-') || attr.name.includes('src')) && 
-                      attr.value && 
-                      attr.value.length > 20 &&
-                      (attr.value.includes('.jpg') || attr.value.includes('.png') || attr.value.includes('.webp') || attr.value.includes('/medias/'))) {
-                    imgSrc = attr.value;
-                    break;
-                  }
-                }
-              }
-              
-              if (imgSrc && imgSrc.includes(' ')) {
-                imgSrc = imgSrc.split(' ')[0].split(',')[0];
-              }
-              
-              if (imgSrc && 
-                  !imgSrc.startsWith('data:') && 
-                  imgSrc.length > 10) {
-                break;
-              } else {
-                imgSrc = '';
-              }
-            }
-          }
-          
-          // Если не нашли в ссылке, ищем в родителе и соседних элементах
-          if (!imgSrc) {
-            const parent = link.closest('li, div[class*="item"], div[class*="card"], div[class*="product"], div[class*="category"], div[class*="thumb"], article, section, div');
-            if (parent) {
-              const imgs = parent.querySelectorAll('img');
-              for (const img of imgs) {
-                const allAttributes = Array.from(img.attributes);
-                
-                imgSrc = img.currentSrc || 
-                         img.src || 
-                         img.getAttribute('data-src') || 
-                         img.getAttribute('data-lazy-src') ||
-                         img.getAttribute('data-original') ||
-                         img.getAttribute('srcset') ||
-                         img.getAttribute('data-image') ||
-                         '';
-                
-                // Ищем в любых data-* атрибутах
-                if (!imgSrc) {
-                  for (const attr of allAttributes) {
-                    if ((attr.name.startsWith('data-') || attr.name.includes('src')) && 
-                        attr.value && 
-                        attr.value.length > 20 &&
-                        (attr.value.includes('.jpg') || attr.value.includes('.png') || attr.value.includes('.webp') || attr.value.includes('/medias/'))) {
-                      imgSrc = attr.value;
-                      break;
-                    }
-                  }
-                }
-                
-                if (imgSrc && imgSrc.includes(' ')) {
-                  imgSrc = imgSrc.split(' ')[0].split(',')[0];
-                }
-                
-                if (imgSrc && 
-                    !imgSrc.startsWith('data:') && 
-                    imgSrc.length > 10) {
-                  break;
-                } else {
-                  imgSrc = '';
-                }
-              }
-            }
-          }
-          
-          if (imgSrc && !imgSrc.startsWith('data:')) {
-            try {
-              // Преобразуем относительные пути в абсолютные
-              if (imgSrc.startsWith('/') && !imgSrc.startsWith('//')) {
-                const urlObj = new URL(url);
-                imgSrc = urlObj.origin + imgSrc;
-              } else if (imgSrc.startsWith('//')) {
-                const urlObj = new URL(url);
-                imgSrc = urlObj.protocol + imgSrc;
-              } else if (!imgSrc.startsWith('http')) {
-                imgSrc = new URL(imgSrc, url).href;
-              }
-              subcat.image = imgSrc;
-            } catch {
-              subcat.image = imgSrc;
-            }
-          }
-        }
-        
-        uniqueUrls.add(fullUrl);
-        subcategories.push(subcat);
-        
-        if (parseImages && subcat.image) {
-          console.log(`    📷 Изображение найдено для "${text}": ${subcat.image}`);
-        }
-      }
-    });
-    
-    console.log(`  ✅ Найдено уникальных подкатегорий: ${subcategories.length}`);
-    if (parseImages) {
-      const withImages = subcategories.filter(s => s.image).length;
-      console.log(`  📷 С изображениями: ${withImages}`);
-    }
-    
-    return subcategories;
-  } catch (error) {
-    console.error('❌ Ошибка fetch подкатегорий:', error);
-    return [];
-  }
-}
 
 // Функция парсинга категорий (выполняется на странице)
 async function parseCategories(parseImages = false) {
@@ -1360,78 +1193,8 @@ async function parseCategories(parseImages = false) {
   };
 }
 
-// Функция для парсинга описания по вашему селектору
-function parseDescriptionBySelector(element) {
-  // Ищем по классу ProductBasicDetails (более гибкий селектор, так как хеш может меняться)
-  const productBasicDetailsSelectors = [
-    '[class*="ProductBasicDetails"]',
-    '[class*="ProductBasicDetails_StyledList"]',
-    '.MuiTypography-root[class*="ProductBasicDetails"]',
-    'ul[class*="ProductBasicDetails"]',
-    '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
-  ];
-
-  // Сначала ищем по классу ProductBasicDetails
-  for (const selector of productBasicDetailsSelectors) {
-    const descriptionElement = element.querySelector(selector);
-    
-    if (descriptionElement) {
-      console.log(`✅ Найден элемент описания по селектору: ${selector}`);
-      
-      // Парсим содержимое списка - ищем все li внутри
-      const listItems = descriptionElement.querySelectorAll('li');
-      if (listItems.length > 0) {
-        const descriptions = [];
-        listItems.forEach(li => {
-          // Используем innerText для более точного извлечения видимого текста
-          const text = (li.innerText || li.textContent || '').trim();
-          if (text && text.length > 0) {
-            descriptions.push(text);
-          }
-        });
-        if (descriptions.length > 0) {
-          const fullDescription = descriptions.join('\n').trim();
-          console.log(`✅ Извлечено ${descriptions.length} пунктов описания, длина: ${fullDescription.length}`);
-          return fullDescription;
-        }
-      } else {
-        // Если нет li, пробуем взять весь текст элемента
-        const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
-        if (text && text.length > 10) {
-          console.log(`✅ Извлечено описание напрямую из элемента, длина: ${text.length}`);
-          return text;
-        }
-      }
-    }
-  }
-
-  // Если не нашли по ProductBasicDetails, пробуем другие селекторы
-  const descriptionSelectors = [
-    '[class*="description"]', 
-    '.product-description', 
-    '.desc', 
-    '[data-description]',
-    '[class*="summary"]',
-    '[class*="short-desc"]',
-    '[class*="long-desc"]',
-    '[class*="detail"]',
-    '[class*="info"]',
-    '[class*="spec"]',
-    '[class*="feature"]'
-  ];
-
-  for (const selector of descriptionSelectors) {
-    const found = element.querySelector(selector);
-    if (found) {
-      const text = (found.innerText || found.textContent || '').trim();
-      if (text && text.length > 10) {
-        return text;
-      }
-    }
-  }
-
-  return '';
-}
+// НЕИСПОЛЬЗУЕМАЯ ГЛОБАЛЬНАЯ ФУНКЦИЯ УДАЛЕНА: parseDescriptionBySelector
+// (логика перенесена внутрь parseProducts и fetchProductDetails как локальные функции)
 
 // Функция парсинга товаров (обновленная с вашим селектором)
 async function parseProducts(parseImages = false) {
@@ -1628,21 +1391,21 @@ async function parseProducts(parseImages = false) {
     }
   };
 
-  // Локальная функция для извлечения описания (копия глобальной, чтобы работала в контексте страницы)
+  // Функция для извлечения описания ТОЛЬКО из элементов ProductBasicDetails с li
   const extractDescriptionFromElement = (element) => {
     if (!element) return '';
 
+    // Ищем только по классу ProductBasicDetails
     const productBasicDetailsSelectors = [
+      '[class*="ProductBasicDetails"][class*="StyledList"]',
       '[class*="ProductBasicDetails"]',
-      '[class*="ProductBasicDetails_StyledList"]',
-      '.MuiTypography-root[class*="ProductBasicDetails"]',
-      'ul[class*="ProductBasicDetails"]',
-      '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
+      'ul[class*="ProductBasicDetails"]'
     ];
 
     for (const selector of productBasicDetailsSelectors) {
       const descriptionElement = element.querySelector(selector);
       if (descriptionElement) {
+        // Ищем все <li> внутри (элементы с ::marker)
         const listItems = descriptionElement.querySelectorAll('li');
         if (listItems.length > 0) {
           const descriptions = [];
@@ -1656,38 +1419,10 @@ async function parseProducts(parseImages = false) {
             return descriptions.join('\n').trim();
           }
         }
-
-        const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
-        if (text && text.length > 10) {
-          return text;
-        }
       }
     }
 
-    const descriptionSelectors = [
-      '[class*="description"]',
-      '.product-description',
-      '.desc',
-      '[data-description]',
-      '[class*="summary"]',
-      '[class*="short-desc"]',
-      '[class*="long-desc"]',
-      '[class*="detail"]',
-      '[class*="info"]',
-      '[class*="spec"]',
-      '[class*="feature"]'
-    ];
-
-    for (const selector of descriptionSelectors) {
-      const found = element.querySelector(selector);
-      if (found) {
-        const text = (found.innerText || found.textContent || '').trim();
-        if (text && text.length > 10) {
-          return text;
-        }
-      }
-    }
-
+    // Если не нашли - возвращаем пустую строку
     return '';
   };
 
@@ -1729,71 +1464,8 @@ async function parseProducts(parseImages = false) {
 
       const price = extractText(element, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
       
-      // ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ ПАРСИНГА ОПИСАНИЯ
-      let description = extractDescriptionFromElement(element);
-      
-      // Если не нашли описание по селекторам, пробуем альтернативные методы
-      if (!description || description.length < 10) {
-        description = extractText(element, [
-          '[class*="description"]', 
-          '.product-description', 
-          '.desc', 
-          '[data-description]',
-          '[class*="summary"]',
-          '[class*="short-desc"]',
-          '[class*="long-desc"]',
-          '[class*="detail"]',
-          '[class*="info"]',
-          '[class*="spec"]',
-          '[class*="feature"]'
-        ]) || element.getAttribute('data-description') || '';
-        
-        // Если всё ещё нет описания, собираем весь текст
-        if (!description || description.length < 10) {
-          const allText = element.innerText || element.textContent || '';
-          let cleanText = allText;
-          if (name) {
-            cleanText = cleanText.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-          }
-          if (price) {
-            cleanText = cleanText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-          }
-          
-          cleanText = cleanText
-            .replace(/\s+/g, ' ')
-            .replace(/\b(Add to Cart|Buy Now|View Details|Learn More|Read More|See More|Shop Now|Add|Cart|Buy|View|Details|More|Now)\b/gi, '')
-            .trim();
-          
-          if (cleanText.length > 15) {
-            description = cleanText.substring(0, 500).trim();
-          } else {
-            const descElements = element.querySelectorAll('p, span, div, li, td, [class*="text"], [class*="info"], [class*="detail"], [class*="desc"]');
-            const descTexts = [];
-            descElements.forEach(descEl => {
-              if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]') || descEl.closest('a')) {
-                return;
-              }
-              const text = descEl.innerText || descEl.textContent;
-              if (text && text.trim().length > 5) {
-                let cleanElText = text;
-                if (name) {
-                  cleanElText = cleanElText.replace(new RegExp(name.substring(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-                }
-                if (price) {
-                  cleanElText = cleanElText.replace(new RegExp(price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
-                }
-                cleanElText = cleanElText.trim();
-                if (cleanElText.length > 5) {
-                  descTexts.push(cleanElText);
-                }
-              }
-            });
-            if (descTexts.length > 0) {
-              description = descTexts.join(' ').trim().substring(0, 500);
-            }
-          }
-        }
-      }
+      // Парсим описание ТОЛЬКО из ProductBasicDetails li элементов
+      const description = extractDescriptionFromElement(element);
 
       // Добавляем товар даже если нет цены и описания
       if (!price && !description) {
@@ -1854,10 +1526,8 @@ async function parseProducts(parseImages = false) {
   });
 
   // Резервный парсинг: сканируем все ссылки и ищем те, что похожи на товары
-  // ИЗМЕНИЛ УСЛОВИЕ: теперь запускаем резервный парсинг, если найдено меньше товаров, чем ожидается
-  // Это поможет найти все товары, даже если основные селекторы пропустили некоторые
   if (productsMap.size < 10) {
-    console.log('⚠️ Основные селекторы не дали результата, запускаю резервный поиск по ссылкам');
+    console.log('⚠️ Основные селекторы нашли мало товаров, запускаю резервный поиск по ссылкам');
     const allLinks = document.querySelectorAll('a[href]');
     const productKeywords = ['product', 'item', 'goods', 'catalog', 'shop', 'sku'];
 
@@ -1896,29 +1566,8 @@ async function parseProducts(parseImages = false) {
 
       price = extractText(parent, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
       
-      // ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ ДЛЯ ПАРСИНГА ОПИСАНИЯ
+      // ИСПОЛЬЗУЕМ УПРОЩЕННЫЙ ПАРСИНГ ОПИСАНИЯ
       description = extractDescriptionFromElement(parent);
-      
-      if (!description || description.length < 10) {
-        description = extractText(parent, ['[class*="description"]', '.product-description', '.desc', '[data-description]']);
-        
-        if (!description || description.length < 10) {
-          const descElements = parent.querySelectorAll('[class*="text"], [class*="info"], [class*="detail"], p, span[class*="desc"]');
-          const descTexts = [];
-          descElements.forEach(descEl => {
-            if (descEl.closest('[class*="name"]') || descEl.closest('[class*="title"]') || descEl.closest('[class*="price"]')) {
-              return;
-            }
-            const text = descEl.innerText || descEl.textContent;
-            if (text && text.trim().length > 10) {
-              descTexts.push(text.trim());
-            }
-          });
-          if (descTexts.length > 0) {
-            description = descTexts.join(' ').trim();
-          }
-        }
-      }
 
       if (!price && !description && parent.textContent.replace(/\s+/g, ' ').trim().length < 15) {
         return;
@@ -1990,7 +1639,107 @@ async function parseProducts(parseImages = false) {
   };
 }
 
-// Обновленная функция fetchProductDetails с вашим селектором
+// Функция для парсинга описания с переходом на страницу товара (выполняется JS)
+async function fetchProductDetailsWithJS(tab, url, parseImages = false) {
+  try {
+    if (!url) {
+      return { description: '', images: [] };
+    }
+
+    console.log(`  🌐 Переход на страницу товара: ${url}`);
+    
+    // Переходим на страницу товара
+    await chrome.tabs.update(tab.id, { url: url });
+    
+    // Ждем полной загрузки страницы
+    await new Promise((resolve) => {
+      const listener = (tabId, changeInfo) => {
+        if (tabId === tab.id && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+    
+    // Дополнительная пауза для загрузки JS контента (3 секунды)
+    console.log(`  ⏳ Ожидание загрузки JS...`);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Парсим описание на странице после загрузки JS
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (parseImages) => {
+        // Парсим описание ТОЛЬКО из ProductBasicDetails li элементов
+        let description = '';
+        const productBasicDetailsSelectors = [
+          '[class*="ProductBasicDetails"][class*="StyledList"]',
+          'ul[class*="ProductBasicDetails"]',
+          '[class*="ProductBasicDetails"]'
+        ];
+
+        for (const selector of productBasicDetailsSelectors) {
+          const descriptionElement = document.querySelector(selector);
+          
+          if (descriptionElement) {
+            console.log(`✅ Найден элемент описания: ${selector}`);
+            
+            const listItems = descriptionElement.querySelectorAll('li');
+            if (listItems.length > 0) {
+              const descriptions = [];
+              listItems.forEach(li => {
+                const text = (li.innerText || li.textContent || '').trim();
+                if (text && text.length > 0) {
+                  descriptions.push(text);
+                }
+              });
+              if (descriptions.length > 0) {
+                description = descriptions.join('\n').trim();
+                console.log(`✅ Извлечено ${descriptions.length} пунктов, длина: ${description.length}`);
+                break;
+              }
+            }
+          }
+        }
+        
+        // Парсим изображения если нужно
+        const images = [];
+        if (parseImages) {
+          const seenImages = new Set();
+          document.querySelectorAll('img').forEach(img => {
+            const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+            if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
+              try {
+                const resolved = new URL(src, window.location.href).href;
+                if (!seenImages.has(resolved)) {
+                  seenImages.add(resolved);
+                  images.push(resolved);
+                }
+              } catch (e) {
+                // ignore
+              }
+            }
+          });
+        }
+        
+        return { description, images };
+      },
+      args: [parseImages]
+    });
+    
+    if (results && results[0] && results[0].result) {
+      console.log(`  ✅ Описание получено, длина: ${results[0].result.description.length}`);
+      return results[0].result;
+    }
+    
+    return { description: '', images: [] };
+  } catch (error) {
+    console.error(`  ❌ Ошибка при парсинге страницы ${url}:`, error);
+    return { description: '', images: [] };
+  }
+}
+
+// СТАРАЯ функция с fetch (оставлена для совместимости, но не используется)
 async function fetchProductDetails(url, parseImages = false) {
   try {
     if (!url) {
@@ -2007,162 +1756,37 @@ async function fetchProductDetails(url, parseImages = false) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
+    // Парсим описание ТОЛЬКО из ProductBasicDetails li элементов
     let description = '';
     
-    // Функция для парсинга описания по классу ProductBasicDetails
-    const parseDescriptionBySelector = (doc) => {
-      // Ищем по классу ProductBasicDetails (более гибкий селектор)
-      const productBasicDetailsSelectors = [
-        '[class*="ProductBasicDetails"]',
-        '[class*="ProductBasicDetails_StyledList"]',
-        '.MuiTypography-root[class*="ProductBasicDetails"]',
-        'ul[class*="ProductBasicDetails"]',
-        '[class*="MuiTypography-root"][class*="ProductBasicDetails"]'
-      ];
+    const productBasicDetailsSelectors = [
+      '[class*="ProductBasicDetails"][class*="StyledList"]',
+      'ul[class*="ProductBasicDetails"]',
+      '[class*="ProductBasicDetails"]'
+    ];
 
-      // Сначала ищем по классу ProductBasicDetails
-      for (const selector of productBasicDetailsSelectors) {
-        const descriptionElement = doc.querySelector(selector);
+    for (const selector of productBasicDetailsSelectors) {
+      const descriptionElement = doc.querySelector(selector);
+      
+      if (descriptionElement) {
+        console.log(`✅ Найден элемент описания: ${selector}`);
         
-        if (descriptionElement) {
-          console.log(`✅ Найден элемент описания по селектору на странице товара: ${selector}`);
-          
-          // Парсим содержимое списка - ищем все li внутри
-          const listItems = descriptionElement.querySelectorAll('li');
-          if (listItems.length > 0) {
-            const descriptions = [];
-            listItems.forEach(li => {
-              // Используем innerText для более точного извлечения видимого текста
-              const text = (li.innerText || li.textContent || '').trim();
-              if (text && text.length > 0) {
-                descriptions.push(text);
-              }
-            });
-            if (descriptions.length > 0) {
-              const fullDescription = descriptions.join('\n').trim();
-              console.log(`✅ Извлечено ${descriptions.length} пунктов описания со страницы товара, длина: ${fullDescription.length}`);
-              return fullDescription;
-            }
-          } else {
-            // Если нет li, пробуем взять весь текст элемента
-            const text = (descriptionElement.innerText || descriptionElement.textContent || '').trim();
-            if (text && text.length > 10) {
-              console.log(`✅ Извлечено описание напрямую из элемента на странице товара, длина: ${text.length}`);
-              return text;
-            }
-          }
-        }
-      }
-      return '';
-    };
-
-    // Сначала пробуем найти описание по классу ProductBasicDetails
-    description = parseDescriptionBySelector(doc);
-
-    // Если не нашли, используем стандартные методы
-    if (!description || description.length < 10) {
-      const descSelectors = [
-        '[class*="description"]',
-        '.product-description',
-        '#description',
-        '.tab-description',
-        '.short-description',
-        '[class*="detail"]',
-        '[class*="info"]',
-        '[class*="content"]',
-        'main [class*="text"]',
-        'article [class*="text"]'
-      ];
-
-      const getFullText = (element) => {
-        if (!element) return '';
-        
-        if (element.innerText) {
-          return element.innerText.trim();
-        }
-        
-        const textNodes = [];
-        const walker = doc.createTreeWalker(
-          element,
-          NodeFilter.SHOW_TEXT,
-          {
-            acceptNode: function(node) {
-              const parent = node.parentElement;
-              if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
-                return NodeFilter.FILTER_REJECT;
-              }
-              return NodeFilter.FILTER_ACCEPT;
-            }
-          },
-          false
-        );
-        
-        let node;
-        while (node = walker.nextNode()) {
-          const text = node.textContent.trim();
-          if (text && text.length > 0) {
-            textNodes.push(text);
-          }
-        }
-        
-        return textNodes.join(' ').trim();
-      };
-
-      for (const selector of descSelectors) {
-        const elements = doc.querySelectorAll(selector);  
-        if (elements.length > 0) {
-          const texts = [];
-          elements.forEach(element => {
-            const text = getFullText(element);
-            if (text && text.length > 5) {
-              texts.push(text);
+        const listItems = descriptionElement.querySelectorAll('li');
+        if (listItems.length > 0) {
+          const descriptions = [];
+          listItems.forEach(li => {
+            const text = (li.innerText || li.textContent || '').trim();
+            if (text && text.length > 0) {
+              descriptions.push(text);
             }
           });
-          
-          if (texts.length > 0) {
-            description = texts.join('\n\n').trim();
+          if (descriptions.length > 0) {
+            description = descriptions.join('\n').trim();
+            console.log(`✅ Извлечено ${descriptions.length} пунктов, длина: ${description.length}`);
             break;
           }
         }
       }
-    }
-
-    // Если всё ещё не нашли, пробуем meta теги
-    if (!description || description.length < 10) {
-      const metaDesc = doc.querySelector('meta[name="description"]') || doc.querySelector('meta[property="og:description"]');
-      if (metaDesc) {
-        const metaText = metaDesc.getAttribute('content')?.trim() || '';
-        if (metaText && metaText.length > description.length) {
-          description = metaText;
-        }
-      }
-    }
-
-    // Пробуем извлечь из JSON-LD
-    if (!description || description.length < 10) {
-      doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
-        try {
-          const json = JSON.parse(script.textContent.trim());
-          const extractDescription = (obj) => {
-            if (typeof obj === 'string') return obj;
-            if (Array.isArray(obj)) {
-              return obj.map(extractDescription).filter(Boolean).join(' ');
-            }
-            if (obj && typeof obj === 'object') {
-              if (obj.description) return extractDescription(obj.description);
-              if (obj.text) return extractDescription(obj.text);
-            }
-            return '';
-          };
-          
-          const jsonDesc = extractDescription(json);
-          if (jsonDesc && jsonDesc.length > description.length) {
-            description = jsonDesc;
-          }
-        } catch (e) {
-          // игнорируем ошибки
-        }
-      });
     }
 
     const imagesSet = new Set();
