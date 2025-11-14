@@ -15,13 +15,25 @@ document.addEventListener('DOMContentLoaded', function() {
   const statsDiv = document.getElementById('stats');
   const progressDiv = document.getElementById('progress');
   const parseImagesCheckbox = document.getElementById('parseImagesCheckbox');
+  const translateCheckbox = document.getElementById('translateCheckbox');
   const tabButtons = document.querySelectorAll('.tab-button');
   const categorySection = document.getElementById('categorySection');
   const productSection = document.getElementById('productSection');
+  const settingsSection = document.getElementById('settingsSection');
   const parseProductsBtn = document.getElementById('parseProductsBtn');
   const deepParseProductsBtn = document.getElementById('deepParseProductsBtn');
+  const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+  const geminiApiKeyInput = document.getElementById('geminiApiKey');
+  const settingsStatus = document.getElementById('settingsStatus');
 
   let currentTab = 'categories';
+
+  // Загружаем сохраненные настройки
+  chrome.storage.local.get(['geminiApiKey'], function(result) {
+    if (result.geminiApiKey) {
+      geminiApiKeyInput.value = result.geminiApiKey;
+    }
+  });
 
   function switchTab(tab) {
     if (currentTab === tab) return;
@@ -31,7 +43,26 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     categorySection.classList.toggle('active', tab === 'categories');
     productSection.classList.toggle('active', tab === 'products');
+    settingsSection.classList.toggle('active', tab === 'settings');
   }
+
+  // Сохранение настроек
+  saveSettingsBtn.addEventListener('click', async () => {
+    const apiKey = geminiApiKeyInput.value.trim();
+    if (!apiKey) {
+      settingsStatus.textContent = '❌ Пожалуйста, введите API ключ';
+      settingsStatus.style.color = '#f44336';
+      return;
+    }
+
+    chrome.storage.local.set({ geminiApiKey: apiKey }, function() {
+      settingsStatus.textContent = '✅ Настройки сохранены!';
+      settingsStatus.style.color = '#4CAF50';
+      setTimeout(() => {
+        settingsStatus.textContent = '';
+      }, 3000);
+    });
+  });
 
   tabButtons.forEach(button => {
     button.addEventListener('click', () => switchTab(button.dataset.tab));
@@ -360,6 +391,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const parseImages = parseImagesCheckbox.checked;
+      const shouldTranslate = translateCheckbox.checked;
+      
+      // Получаем API ключ из хранилища
+      const storageData = await new Promise((resolve) => {
+        chrome.storage.local.get(['geminiApiKey'], (result) => resolve(result));
+      });
+      const geminiApiKey = storageData.geminiApiKey || '';
+      
+      console.log('🔑 API ключ из хранилища:', geminiApiKey ? `${geminiApiKey.substring(0, 10)}...` : 'НЕ УСТАНОВЛЕН');
+      console.log('🌐 Перевод включен:', shouldTranslate);
+      
+      if (shouldTranslate && !geminiApiKey) {
+        statusDiv.textContent = '⚠️ Для перевода необходимо установить API ключ в настройках';
+        statusDiv.className = 'status warning';
+        parseProductsBtn.disabled = false;
+        deepParseProductsBtn.disabled = false;
+        return;
+      }
 
       // Шаг 1: парсим текущую страницу
       statusDiv.textContent = '📋 Сбор товаров с текущей страницы...';
@@ -427,6 +476,35 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (details.description) {
               description = details.description;
+              
+              // Переводим описание если включен перевод
+              if (shouldTranslate && geminiApiKey && description) {
+                try {
+                  statusDiv.textContent = `🌐 Перевод описания товара ${i + 1} из ${productsToProcess.length}...`;
+                  console.log(`📝 Переводим описание товара "${product.name}":`, description.substring(0, 100) + '...');
+                  const translatedDescription = await translateWithGemini(description, geminiApiKey);
+                  
+                  console.log(`🔍 Результат перевода для "${product.name}":`);
+                  console.log(`   Оригинал (${description.length} символов):`, description.substring(0, 50) + '...');
+                  console.log(`   Перевод (${translatedDescription.length} символов):`, translatedDescription.substring(0, 50) + '...');
+                  console.log(`   Тексты идентичны:`, translatedDescription === description);
+                  
+                  if (translatedDescription && translatedDescription.trim().length > 0) {
+                    product.descriptionTranslated = translatedDescription;
+                    console.log(`✅ Перевод сохранен для товара "${product.name}"`);
+                  } else {
+                    console.warn(`⚠️ Перевод пустой для товара "${product.name}"`);
+                  }
+                  
+                  // Задержка между переводами чтобы не перегрузить API
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                  
+                } catch (translateError) {
+                  console.error(`❌ Ошибка перевода для товара "${product.name}":`, translateError);
+                  console.warn(`⚠️ Продолжаем парсинг без перевода для товара "${product.name}"`);
+                  // Продолжаем без перевода - не показываем ошибку пользователю, чтобы не останавливать процесс
+                }
+              }
             }
             if (details.images && details.images.length > 0) {
               const imageSet = new Set(images);
@@ -468,6 +546,7 @@ document.addEventListener('DOMContentLoaded', function() {
           url: product.url || '',
           price: product.price || '',
           description: description || '',
+          descriptionTranslated: product.descriptionTranslated || '',
           image: uniqueImages[0] || '',
           images: uniqueImages,
           specifications: product.specifications || {
@@ -844,6 +923,136 @@ document.addEventListener('DOMContentLoaded', function() {
     clearBtn.disabled = true;
   });
 });
+
+// Функция перевода текста через Gemini API с автоматическими повторными попытками
+async function translateWithGemini(text, apiKey, retryCount = 0, maxRetries = 3) {
+  if (!text || text.trim().length === 0) {
+    return '';
+  }
+
+  if (!apiKey || apiKey.trim().length === 0) {
+    console.warn('⚠️ API ключ Gemini не установлен, перевод пропущен');
+    return text; // Возвращаем оригинальный текст
+  }
+
+  try {
+    // Правильный URL для Gemini API v1beta (gemini-2.5-pro - стабильная версия)
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+    
+    const prompt = `Переведи следующий текст на русский язык. Если текст уже на русском, просто верни его как есть. Не добавляй никаких пояснений, только переведенный текст:\n\n${text}`;
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 8192,
+        },
+        safetySettings: [
+          {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_NONE"
+          },
+          {
+            category: "HARM_CATEGORY_HATE_SPEECH",
+            threshold: "BLOCK_NONE"
+          },
+          {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_NONE"
+          },
+          {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_NONE"
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}`;
+      let errorData = null;
+      
+      try {
+        errorData = await response.json();
+        errorMessage = errorData.error?.message || JSON.stringify(errorData);
+      } catch (e) {
+        errorMessage = await response.text().catch(() => 'Неизвестная ошибка');
+      }
+      
+      // Обработка ошибок перегрузки (503) и лимита (429)
+      if ((response.status === 503 || response.status === 429) && retryCount < maxRetries) {
+        const delay = Math.pow(2, retryCount) * 2000; // Экспоненциальная задержка: 2s, 4s, 8s
+        console.warn(`⚠️ API перегружен (${response.status}). Повторная попытка ${retryCount + 1}/${maxRetries} через ${delay/1000}с...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return translateWithGemini(text, apiKey, retryCount + 1, maxRetries);
+      }
+      
+      console.error('❌ Ошибка Gemini API:', response.status, errorMessage);
+      throw new Error(`Gemini API ошибка ${response.status}: ${errorMessage}`);
+    }
+
+    const data = await response.json();
+    console.log('✅ Gemini API ответ получен:', data);
+    
+    // Проверяем наличие кандидатов
+    if (!data.candidates || data.candidates.length === 0) {
+      console.error('❌ Нет candidates в ответе API');
+      console.warn('⚠️ Возвращаем оригинальный текст');
+      return text;
+    }
+    
+    const candidate = data.candidates[0];
+    
+    // Проверяем причину завершения
+    if (candidate.finishReason === 'MAX_TOKENS') {
+      console.warn('⚠️ Ответ обрезан из-за лимита токенов (MAX_TOKENS)');
+    } else if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+      console.warn('⚠️ Необычная причина завершения:', candidate.finishReason);
+    }
+    
+    // Пытаемся извлечь текст из разных возможных структур
+    let translatedText = null;
+    
+    // Вариант 1: content.parts[0].text (стандартная структура)
+    if (candidate.content && 
+        candidate.content.parts && 
+        candidate.content.parts.length > 0 &&
+        candidate.content.parts[0].text) {
+      translatedText = candidate.content.parts[0].text.trim();
+    }
+    // Вариант 2: content.text (альтернативная структура)
+    else if (candidate.content && candidate.content.text) {
+      translatedText = candidate.content.text.trim();
+    }
+    // Вариант 3: text напрямую
+    else if (candidate.text) {
+      translatedText = candidate.text.trim();
+    }
+    
+    if (translatedText) {
+      console.log('✅ Перевод выполнен:', translatedText.substring(0, 100) + '...');
+      return translatedText;
+    }
+
+    console.error('❌ Не удалось извлечь текст из ответа API');
+    console.warn('📋 Структура candidate:', JSON.stringify(candidate, null, 2));
+    console.warn('⚠️ Возвращаем оригинальный текст');
+    return text; // Возвращаем оригинальный текст если нет перевода
+  } catch (error) {
+    console.error('❌ Ошибка при переводе через Gemini:', error);
+    console.warn('⚠️ Возвращаем оригинальный текст из-за ошибки');
+    return text; // Возвращаем оригинальный текст при ошибке, не прерывая процесс
+  }
+}
 
 // Функция парсинга категорий (выполняется на странице)
 async function parseCategories(parseImages = false) {
@@ -2611,7 +2820,7 @@ SET time_zone = "+00:00";
 -- Dumping data for table \`products\`
 --
 
-INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_whosale\`, \`description\`, \`created\`, \`updated\`) VALUES
+INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_whosale\`, \`description\`, \`description_translated\`, \`created\`, \`updated\`) VALUES
 `;
 
   const productValues = [];
@@ -2630,8 +2839,18 @@ INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort
     // Цена в копейках (INT) или 0
     const priceWhosale = price || 0;
     
+    // Переведенное описание (если есть)
+    const descriptionTranslated = product.descriptionTranslated || '';
+    
+    // Логируем наличие перевода
+    if (descriptionTranslated) {
+      console.log(`✅ SQL: Товар "${cleanName}" имеет переведенное описание (${descriptionTranslated.length} символов)`);
+    } else if (product.description) {
+      console.log(`⚠️ SQL: Товар "${cleanName}" имеет описание, но БЕЗ перевода`);
+    }
+    
     productValues.push(
-      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(cleanName)}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${priceWhosale}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${now}, ${now})`
+      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(cleanName)}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${priceWhosale}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${descriptionTranslated ? `'${escapeSQL(descriptionTranslated)}'` : 'NULL'}, ${now}, ${now})`
     );
     
     // Добавляем характеристики в product_options (ключ/значение)

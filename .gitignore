@@ -9,6 +9,11 @@ desktop.ini
 *.sublime-project
 *.sublime-workspace
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
 # Logs
 *.log
 npm-debug.log*

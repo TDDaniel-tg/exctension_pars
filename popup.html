@@ -13,12 +13,17 @@
     <div class="tab-buttons">
       <button class="tab-button active" data-tab="categories">Категории</button>
       <button class="tab-button" data-tab="products">Товары</button>
+      <button class="tab-button" data-tab="settings">⚙️ Настройки</button>
     </div>
 
     <div class="options">
       <label class="checkbox-label">
         <input type="checkbox" id="parseImagesCheckbox">
         <span>📷 Парсить изображения</span>
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="translateCheckbox">
+        <span>🌐 Переводить описания</span>
       </label>
     </div>
 
@@ -39,8 +44,6 @@
     </div>
 
     <div id="productSection" class="tab-section">
-      
-
       <div class="controls">
         <button id="parseProductsBtn" class="btn btn-primary">
           🛒 Быстрый парсинг товаров
@@ -49,6 +52,23 @@
         <button id="deepParseProductsBtn" class="btn btn-primary" style="background: #FF8C42;">
           🔎 Глубокий парсинг товаров
         </button>
+      </div>
+    </div>
+
+    <div id="settingsSection" class="tab-section">
+      <div class="info">
+        <h3>🔑 API ключи</h3>
+        <p>Для перевода описаний товаров используется Gemini API</p>
+        <p><small>Получить ключ можно здесь: <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a></small></p>
+      </div>
+
+      <div class="settings-group">
+        <label for="geminiApiKey">Gemini API Key:</label>
+        <input type="password" id="geminiApiKey" placeholder="Введите ваш Gemini API ключ" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
+        <button id="saveSettingsBtn" class="btn btn-primary" style="margin-top: 10px;">
+          💾 Сохранить настройки
+        </button>
+        <div id="settingsStatus" style="margin-top: 10px; font-size: 12px;"></div>
       </div>
     </div>
 
