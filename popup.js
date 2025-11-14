@@ -51,13 +51,13 @@ document.addEventListener('DOMContentLoaded', function() {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const parseImages = parseImagesCheckbox.checked;
       
-     // Основной парсинг
-const results = await chrome.scripting.executeScript({
-  target: { tabId: tab.id },
+      // Основной парсинг
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
   func: parseCategories,
   args: [parseImages],
   world: 'MAIN' // Добавляем это для обхода CSP
-});
+      });
 
       if (results && results[0] && results[0].result) {
         parsedDataType = 'categories';
@@ -362,13 +362,13 @@ const results = await chrome.scripting.executeScript({
       const parseImages = parseImagesCheckbox.checked;
 
       // Шаг 1: парсим текущую страницу
-statusDiv.textContent = '📋 Сбор товаров с текущей страницы...';
-const results = await chrome.scripting.executeScript({
-  target: { tabId: tab.id },
+      statusDiv.textContent = '📋 Сбор товаров с текущей страницы...';
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
   func: parseProducts,
   args: [true], // собираем базовые изображения сразу
   world: 'MAIN' // Добавляем это для обхода CSP
-});
+      });
 
       if (!results || !results[0] || !results[0].result || !results[0].result.products) {
         throw new Error('Не удалось получить список товаров');
@@ -628,6 +628,12 @@ const results = await chrome.scripting.executeScript({
             : (product.image ? [product.image] : []);
 
           images.forEach((imgUrl, index) => {
+            // Пропускаем placeholder изображения
+            if (imgUrl === 'placeholder') {
+              console.log(`⚠️ Плейсхолдер пропущен для товара: ${product.name}`);
+              return;
+            }
+            
             if (!imgUrl || seenImageUrls.has(imgUrl)) {
               if (imgUrl) {
                 console.log(`⚠️ Дубликат изображения пропущен: ${imgUrl}`);
@@ -1495,7 +1501,7 @@ async function parseProducts(parseImages = false) {
       }
 
       const price = extractText(element, ['[class*="price"]', '.price', '[data-price]', '.product-price']);
-      
+
       // Парсим описание ТОЛЬКО из ProductBasicDetails li элементов
       const description = extractDescriptionFromElement(element);
 
@@ -1529,11 +1535,11 @@ async function parseProducts(parseImages = false) {
           const resolved = resolveImageUrl(src);
           
           if (resolved && isValidImage(resolved)) {
-            if (!primaryImage) {
-              primaryImage = resolved;
-            }
-            if (parseImages) {
-              imagesSet.add(resolved);
+          if (!primaryImage) {
+            primaryImage = resolved;
+          }
+          if (parseImages) {
+            imagesSet.add(resolved);
             }
           }
         }
@@ -1615,11 +1621,11 @@ async function parseProducts(parseImages = false) {
           const resolved = resolveImageUrl(src);
           
           if (resolved && isValidImage(resolved)) {
-            if (!primaryImage) {
-              primaryImage = resolved;
-            }
-            if (parseImages) {
-              imagesSet.add(resolved);
+          if (!primaryImage) {
+            primaryImage = resolved;
+          }
+          if (parseImages) {
+            imagesSet.add(resolved);
             }
           }
         }
@@ -1801,6 +1807,7 @@ async function fetchProductDetailsWithJS(tab, url, parseImages = false) {
         const images = [];
         if (parseImages) {
           const seenImages = new Set();
+          const seenFilenames = new Set(); // Дедупликация по имени файла
           
           // Ищем карусель изображений товара
           const carouselSelectors = [
@@ -1820,40 +1827,155 @@ async function fetchProductDetailsWithJS(tab, url, parseImages = false) {
             }
           }
           
-          // Если нашли карусель - парсим только из неё
-          if (carouselContainer) {
-            carouselContainer.querySelectorAll('img').forEach(img => {
-              const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-              if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
-                try {
-                  const resolved = new URL(src, window.location.href).href;
-                  if (!seenImages.has(resolved)) {
-                    seenImages.add(resolved);
-                    images.push(resolved);
+          // Проверяем, является ли элемент SVG плейсхолдером
+          const isPlaceholder = (element) => {
+            if (!element) return false;
+            
+            // Проверяем родительские элементы на наличие data-testid="DefaultImageContainer"
+            let parent = element.parentElement;
+            for (let i = 0; i < 5 && parent; i++) {
+              const testId = parent.getAttribute('data-testid');
+              if (testId && testId.includes('DefaultImageContainer')) {
+                console.log('🔍 Найден плейсхолдер: DefaultImageContainer');
+                return true;
+              }
+              
+              // Проверяем наличие SVG с rect/path (типичный placeholder)
+              if (parent.tagName === 'svg' || parent.querySelector('svg')) {
+                const svg = parent.tagName === 'svg' ? parent : parent.querySelector('svg');
+                if (svg && (svg.querySelector('rect') || svg.querySelector('path'))) {
+                  const viewBox = svg.getAttribute('viewBox');
+                  // SVG placeholder обычно имеет viewBox и rect/path элементы
+                  if (viewBox) {
+                    console.log('🔍 Найден SVG плейсхолдер');
+                    return true;
                   }
-                } catch (e) {
-                  // ignore
                 }
               }
-            });
-            console.log(`📷 Найдено изображений в карусели: ${images.length}`);
+              
+              parent = parent.parentElement;
+            }
+            
+            // Проверяем сам элемент img на data:image/svg
+            const src = element.currentSrc || element.src || '';
+            if (src.startsWith('data:image/svg+xml')) {
+              const svgContent = decodeURIComponent(src);
+              // Если SVG содержит много путей и rect - это placeholder
+              if (svgContent.includes('rect') && svgContent.includes('fill=')) {
+                console.log('🔍 Найден data:image/svg плейсхолдер');
+                return true;
+              }
+            }
+            
+            return false;
+          };
+          
+          // Если нашли карусель - парсим только из неё
+          if (carouselContainer) {
+            const allCarouselImages = Array.from(carouselContainer.querySelectorAll('img'));
+            
+            // Проверяем наличие плейсхолдеров
+            const hasPlaceholder = allCarouselImages.some(img => isPlaceholder(img));
+            if (hasPlaceholder) {
+              console.log('⚠️ Обнаружен плейсхолдер в карусели → ТОЛЬКО placeholder, другие фото НЕ парсим');
+              images.push('placeholder');
+              // ВАЖНО: Если есть плейсхолдер - НЕ парсим остальные изображения!
+            } else {
+              // Только если НЕТ плейсхолдера - парсим реальные изображения
+              
+              // Фильтруем миниатюры и маленькие изображения
+              const mainImages = allCarouselImages.filter(img => {
+                const width = img.naturalWidth || img.width || 0;
+                const height = img.naturalHeight || img.height || 0;
+                
+                // Пропускаем миниатюры (обычно < 100px)
+                if ((width > 0 && width < 100) || (height > 0 && height < 100)) {
+                  return false;
+                }
+                
+                // Пропускаем элементы с классами thumbnail, thumb, preview, mini
+                const imgClass = (img.className || '').toLowerCase();
+                if (imgClass.includes('thumb') || imgClass.includes('preview') || 
+                    imgClass.includes('mini') || imgClass.includes('small')) {
+                  return false;
+                }
+                
+                return true;
+              });
+              
+              console.log(`🔍 Всего img элементов в карусели: ${allCarouselImages.length}, после фильтра миниатюр: ${mainImages.length}`);
+              
+              mainImages.forEach(img => {
+                const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+                if (src && src.length > 10 && !src.includes('1x1')) {
+                  try {
+                    const resolved = new URL(src, window.location.href).href;
+                    
+                    // Извлекаем имя файла для дедупликации
+                    const urlParts = resolved.split('?')[0].split('/');
+                    const filename = urlParts[urlParts.length - 1];
+                    
+                    // Проверяем уникальность по полному URL И по имени файла
+                    if (!seenImages.has(resolved) && !seenFilenames.has(filename)) {
+                      seenImages.add(resolved);
+                      seenFilenames.add(filename);
+                      images.push(resolved);
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              });
+              console.log(`📷 Найдено уникальных изображений: ${images.length}`);
+            }
           } else {
             // Если карусели нет - используем старую логику (все img на странице)
             console.log(`⚠️ Карусель не найдена, парсим все изображения`);
-            document.querySelectorAll('img').forEach(img => {
-              const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
-              if (src && src.length > 10 && !src.includes('placeholder') && !src.includes('1x1')) {
-                try {
-                  const resolved = new URL(src, window.location.href).href;
-                  if (!seenImages.has(resolved)) {
-                    seenImages.add(resolved);
-                    images.push(resolved);
-                  }
-                } catch (e) {
-                  // ignore
+            const allImages = Array.from(document.querySelectorAll('img'));
+            
+            // Проверяем наличие плейсхолдеров
+            const hasPlaceholder = allImages.some(img => isPlaceholder(img));
+            if (hasPlaceholder) {
+              console.log('⚠️ Обнаружен плейсхолдер на странице → ТОЛЬКО placeholder, другие фото НЕ парсим');
+              images.push('placeholder');
+              // ВАЖНО: Если есть плейсхолдер - НЕ парсим остальные изображения!
+            } else {
+              // Только если НЕТ плейсхолдера - парсим реальные изображения
+              
+              // Фильтруем миниатюры
+              const mainImages = allImages.filter(img => {
+                const width = img.naturalWidth || img.width || 0;
+                const height = img.naturalHeight || img.height || 0;
+                if ((width > 0 && width < 100) || (height > 0 && height < 100)) {
+                  return false;
                 }
-              }
-            });
+                const imgClass = (img.className || '').toLowerCase();
+                if (imgClass.includes('thumb') || imgClass.includes('preview') || 
+                    imgClass.includes('mini') || imgClass.includes('small')) {
+                  return false;
+                }
+                return true;
+              });
+              
+              mainImages.forEach(img => {
+                const src = img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src');
+                if (src && src.length > 10 && !src.includes('1x1')) {
+                  try {
+                    const resolved = new URL(src, window.location.href).href;
+                    const urlParts = resolved.split('?')[0].split('/');
+                    const filename = urlParts[urlParts.length - 1];
+                    
+                    if (!seenImages.has(resolved) && !seenFilenames.has(filename)) {
+                      seenImages.add(resolved);
+                      seenFilenames.add(filename);
+                      images.push(resolved);
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              });
+            }
           }
         }
         
@@ -1918,9 +2040,9 @@ async function fetchProductDetails(url, parseImages = false) {
           if (descriptions.length > 0) {
             description = descriptions.join('\n').trim();
             console.log(`✅ Извлечено ${descriptions.length} пунктов, длина: ${description.length}`);
-            break;
-          }
-        }
+        break;
+      }
+    }
       }
     }
 
@@ -1998,7 +2120,7 @@ async function fetchProductDetails(url, parseImages = false) {
       } catch (e) {
         // Если не удалось разрешить URL, но исходный валиден, добавляем его
         if (isValidImageUrl(src)) {
-          imagesSet.add(src);
+        imagesSet.add(src);
         }
       }
     };
@@ -2325,6 +2447,11 @@ function transliterate(str) {
 
 // Функция для генерации имени файла фото (формат: /storage/YYYY/MMDD/hash.jpg)
 function generatePhotoPath(imageUrl, productId) {
+  // Если это плейсхолдер, возвращаем "placeholder"
+  if (imageUrl === 'placeholder') {
+    return 'placeholder';
+  }
+  
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -2535,19 +2662,26 @@ INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort
     const uniqueImages = [];
     const seenUrls = new Set();
     
-    allImages.forEach((imgUrl) => {
-      if (!imgUrl || typeof imgUrl !== 'string') return;
-      const trimmed = imgUrl.trim();
-      if (trimmed.length < 10) return; // Минимальная длина для валидного URL
-      if (trimmed.startsWith('data:')) return; // Пропускаем data: URI
-      
-      // Нормализуем URL для проверки дубликатов (убираем параметры запроса)
-      const normalizedUrl = trimmed.split('?')[0].split('#')[0];
-      if (!seenUrls.has(normalizedUrl)) {
-        seenUrls.add(normalizedUrl);
-        uniqueImages.push(trimmed);
-      }
-    });
+    // Если в изображениях есть placeholder - ТОЛЬКО он, больше ничего не добавляем
+    const hasPlaceholder = allImages.some(img => img === 'placeholder');
+    if (hasPlaceholder) {
+      uniqueImages.push('placeholder');
+    } else {
+      // Если нет placeholder - обрабатываем реальные изображения
+      allImages.forEach((imgUrl) => {
+        if (!imgUrl || typeof imgUrl !== 'string') return;
+        const trimmed = imgUrl.trim();
+        if (trimmed.length < 10) return; // Минимальная длина для валидного URL
+        if (trimmed.startsWith('data:')) return; // Пропускаем data: URI
+        
+        // Нормализуем URL для проверки дубликатов (убираем параметры запроса)
+        const normalizedUrl = trimmed.split('?')[0].split('#')[0];
+        if (!seenUrls.has(normalizedUrl)) {
+          seenUrls.add(normalizedUrl);
+          uniqueImages.push(trimmed);
+        }
+      });
+    }
     
     uniqueImages.forEach((imgUrl, index) => {
       let currentPhotoPath;
