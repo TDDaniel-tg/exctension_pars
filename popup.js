@@ -713,12 +713,23 @@ const results = await chrome.scripting.executeScript({
         return;
       }
 
-      statusDiv.textContent = `📷 Найдено ${imagesToDownload.length} изображений. Создание ZIP архива...`;
+      // Создаем структуру папок /storage/год/месяцдень/
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const dateFolder = `${year}/${month}${day}`;
       
-      // Создаем ZIP архив
+      statusDiv.textContent = `📷 Найдено ${imagesToDownload.length} изображений. Создание структуры /storage/${dateFolder}/...`;
+      
+      // Создаем ZIP архив со структурой storage
       const zip = new JSZip();
+      const storageFolder = zip.folder('storage');
+      const dateSubfolder = storageFolder.folder(dateFolder);
+      
       let downloaded = 0;
       let failed = 0;
+      let imageIndex = 1;
 
       for (const img of imagesToDownload) {
         try {
@@ -726,16 +737,18 @@ const results = await chrome.scripting.executeScript({
           let extension = '.jpg';
           try {
             const urlPath = new URL(img.url).pathname;
-            const ext = urlPath.split('.').pop().split('?')[0];
-            if (ext && ext.length <= 4) {
+            const ext = urlPath.split('.').pop().split('?')[0].toLowerCase();
+            if (ext && ext.length <= 4 && ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
               extension = '.' + ext;
             }
           } catch (e) {}
           
-          // Корректируем имя файла с правильным расширением
-          let filename = img.filename.replace(/\.(jpg|jpeg|png|gif|webp)$/i, extension);
+          // Имя файла: 001.jpg, 002.jpg и т.д.
+          const paddedIndex = String(imageIndex).padStart(3, '0');
+          const filename = paddedIndex + extension;
+          imageIndex++;
           
-          console.log('Скачивание:', img.url);
+          console.log(`Скачивание: ${img.url} → /storage/${dateFolder}/${filename}`);
           
           // Скачиваем изображение как blob
           const response = await fetch(img.url);
@@ -743,13 +756,13 @@ const results = await chrome.scripting.executeScript({
           
           const blob = await response.blob();
           
-          // Добавляем в ZIP
-          zip.file(filename, blob);
+          // Добавляем в ZIP со структурой storage
+          dateSubfolder.file(filename, blob);
           downloaded++;
           
           progressDiv.innerHTML = `
             <div><strong>Прогресс:</strong> ${downloaded + failed} из ${imagesToDownload.length}</div>
-            <div><strong>Текущий файл:</strong> ${filename}</div>
+            <div><strong>Путь:</strong> /storage/${dateFolder}/${filename}</div>
             <div class="progress-bar">
               <div class="progress-fill" style="width: ${Math.round(((downloaded + failed) / imagesToDownload.length) * 100)}%">
                 ${Math.round(((downloaded + failed) / imagesToDownload.length) * 100)}%
@@ -787,14 +800,15 @@ const results = await chrome.scripting.executeScript({
       // Скачиваем ZIP файл
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
-      const zipPrefix = parsedDataType === 'products' ? 'products_images_' : 'categories_images_';
+      const zipPrefix = parsedDataType === 'products' ? 'storage_products_' : 'storage_categories_';
+      const dateStr = `${year}${month}${day}`;
       a.href = url;
-      a.download = `${zipPrefix}${new Date().getTime()}.zip`;
+      a.download = `${zipPrefix}${dateStr}.zip`;
       a.click();
       URL.revokeObjectURL(url);
 
       progressDiv.innerHTML = '';
-      statusDiv.textContent = `✅ ZIP архив создан! Скачано ${downloaded} изображений${failed > 0 ? ` (Ошибок: ${failed})` : ''}`;
+      statusDiv.textContent = `✅ ZIP со структурой /storage/${dateFolder}/ создан! Скачано: ${downloaded}${failed > 0 ? `, Ошибок: ${failed}` : ''}. Распакуйте в корень проекта.`;
       statusDiv.className = 'status success';
       
     } catch (error) {
@@ -2364,21 +2378,28 @@ function generateCategoryPhotoPath(categoryId, isSubcategory = false) {
   return `/storage/${datePath}/${photoNumber}.jpg`;
 }
 
-// Функция для обработки цены (сохраняет исходный формат)
+// Функция для парсинга цены в копейки/центы (INT)
 function parsePrice(priceStr) {
-  if (!priceStr || priceStr.trim() === '') return null;
+  if (!priceStr || priceStr.trim() === '') return 0;
   
-  // Возвращаем цену в исходном формате как на сайте
-  return priceStr.trim();
+  // Удаляем все кроме цифр и точки/запятой
+  const cleaned = priceStr.replace(/[^\d.,]/g, '').replace(',', '.');
+  const price = parseFloat(cleaned);
+  
+  if (isNaN(price)) return 0;
+  
+  // Конвертируем в копейки/центы (умножаем на 100 и округляем ВВЕРХ)
+  return Math.ceil(price * 100);
 }
 
 // Функция для извлечения SKU из названия или URL
 function extractSKU(name, url) {
-  // Ищем паттерны типа "SKU123", "CODE-456", "LPSTS42JD" и т.д.
+  // Ищем паттерны типа "TY26871", "SKU123", "CODE-456" и т.д.
   const skuPatterns = [
-    /[A-Z]{2,}[0-9A-Z]{3,}/,  // Буквы + цифры/буквы
-    /[A-Z]+[0-9]+[A-Z]*/,      // Буквы + цифры
-    /[0-9]+[A-Z]+[0-9]*/       // Цифры + буквы
+    /[A-Z]{2}[0-9]{4,}/,        // Паттерн типа TY26871
+    /[A-Z]{2,}[0-9A-Z]{3,}/,    // Буквы + цифры/буквы
+    /[A-Z]+[0-9]+[A-Z]*/,       // Буквы + цифры
+    /[0-9]+[A-Z]+[0-9]*/        // Цифры + буквы
   ];
   
   // Сначала проверяем название
@@ -2404,6 +2425,25 @@ function extractSKU(name, url) {
   
   // Если ничего не нашли, генерируем из названия
   return transliterate(name).substring(0, 20).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'SKU' + Date.now();
+}
+
+// Функция для очистки названия от артикула
+function cleanProductName(name, sku) {
+  if (!name) return '';
+  
+  // Удаляем артикул и все что перед двоеточием
+  let cleaned = name;
+  
+  // Удаляем "SKU: название"
+  if (sku && name.includes(sku)) {
+    cleaned = cleaned.replace(new RegExp(`${sku}\\s*:?\\s*`, 'gi'), '');
+  }
+  
+  // Удаляем паттерны типа "TY26871: "
+  cleaned = cleaned.replace(/^[A-Z]{2}[0-9]{4,}\s*:\s*/i, '');
+  cleaned = cleaned.replace(/^[A-Z0-9]+\s*:\s*/i, '');
+  
+  return cleaned.trim();
 }
 
 // Функция для экранирования SQL строк
@@ -2444,7 +2484,7 @@ SET time_zone = "+00:00";
 -- Dumping data for table \`products\`
 --
 
-INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_whosale\`, \`description\`, \`weight\`, \`height\`, \`width\`, \`length\`, \`volume\`, \`created\`, \`updated\`) VALUES
+INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort_id\`, \`sku_code\`, \`title\`, \`screen_name\`, \`photo\`, \`price_whosale\`, \`description\`, \`created\`, \`updated\`) VALUES
 `;
 
   const productValues = [];
@@ -2454,25 +2494,37 @@ INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort
 
   data.products.forEach((product) => {
     const sku = extractSKU(product.name || '', product.url || '');
-    const screenName = transliterate(product.name || 'product-' + productId);
+    const cleanName = cleanProductName(product.name || '', sku);
+    const screenName = transliterate(cleanName || 'product-' + productId);
     const price = parsePrice(product.price || '');
     const photo = product.image || (product.images && product.images.length > 0 ? product.images[0] : '');
     const photoPath = photo ? generatePhotoPath(photo, productId) : '';
     
-    // Форматируем цену: если null - пишем NULL, иначе строку в кавычках
-    const priceWhosale = price !== null ? `'${escapeSQL(price)}'` : 'NULL';
-    
-    // Форматируем характеристики: если есть - в кавычках, если нет - NULL
-    const specs = product.specifications || {};
-    const weight = specs.weight ? `'${escapeSQL(specs.weight)}'` : 'NULL';
-    const height = specs.height ? `'${escapeSQL(specs.height)}'` : 'NULL';
-    const width = specs.width ? `'${escapeSQL(specs.width)}'` : 'NULL';
-    const length = specs.length ? `'${escapeSQL(specs.length)}'` : 'NULL';
-    const volume = specs.volume ? `'${escapeSQL(specs.volume)}'` : 'NULL';
+    // Цена в копейках (INT) или 0
+    const priceWhosale = price || 0;
     
     productValues.push(
-      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(product.name || '')}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${priceWhosale}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${weight}, ${height}, ${width}, ${length}, ${volume}, ${now}, ${now})`
+      `(${productId}, 0, 1, 0, '${escapeSQL(sku)}', '${escapeSQL(cleanName)}', '${escapeSQL(screenName)}', '${escapeSQL(photoPath)}', ${priceWhosale}, ${product.description ? `'${escapeSQL(product.description)}'` : 'NULL'}, ${now}, ${now})`
     );
+    
+    // Добавляем характеристики в product_options (ключ/значение)
+    const specs = product.specifications || {};
+    const specKeys = ['weight', 'height', 'width', 'length', 'volume'];
+    const specLabels = {
+      weight: 'Weight',
+      height: 'Height', 
+      width: 'Width',
+      length: 'Length',
+      volume: 'Volume'
+    };
+    
+    specKeys.forEach(key => {
+      if (specs[key]) {
+        photoValues.push(
+          `(NULL, ${productId}, '${specLabels[key]}', '${escapeSQL(specs[key])}', 0, ${now})`
+        );
+      }
+    });
 
     // Добавляем все фотографии в product_photos, но только валидные
     const allImages = product.images && product.images.length > 0 
@@ -2520,14 +2572,37 @@ INSERT INTO \`products\` (\`product_id\`, \`category_id\`, \`status_id\`, \`sort
 
   sql += productValues.join(',\n') + ';\n\n';
 
-  if (photoValues.length > 0) {
+  // Разделяем photoValues на две категории: фотографии и опции
+  const actualPhotos = [];
+  const productOptions = [];
+  
+  photoValues.forEach(value => {
+    // Если это опция (имеет 6 параметров вместо 3)
+    if (value.match(/,/g).length >= 5) {
+      productOptions.push(value);
+    } else {
+      actualPhotos.push(value);
+    }
+  });
+
+  if (actualPhotos.length > 0) {
     sql += `--
 -- Dumping data for table \`product_photos\`
 --
 
 INSERT INTO \`product_photos\` (\`id\`, \`product_id\`, \`url\`) VALUES
 `;
-    sql += photoValues.join(',\n') + ';\n\n';
+    sql += actualPhotos.join(',\n') + ';\n\n';
+  }
+  
+  if (productOptions.length > 0) {
+    sql += `--
+-- Dumping data for table \`product_options\`
+--
+
+INSERT INTO \`product_options\` (\`id\`, \`product_id\`, \`name\`, \`value\`, \`sort_id\`, \`created\`) VALUES
+`;
+    sql += productOptions.join(',\n') + ';\n\n';
   }
 
   sql += `COMMIT;
